@@ -1,0 +1,9 @@
+.ipynb_checkpoints/
+data/
+__pycache__/
+.vscode/
+ckpt/
+.env
+results/
+l2o.egg-info/
+.archive/
