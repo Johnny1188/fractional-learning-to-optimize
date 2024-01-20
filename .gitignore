@@ -5,5 +5,5 @@ __pycache__/
 ckpt/
 .env
 results/
-l2o.egg-info/
+fl2o.egg-info/
 .archive/
