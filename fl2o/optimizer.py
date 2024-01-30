@@ -235,6 +235,12 @@ class CFGD(nn.Module):
         super().__setstate__(state)
 
     def _get_grads_diag_hess(self, optee, task, forward_w_params, params_for, n_iters=3):
+        ### set requires_grad=False for all params
+        required_grad = dict()
+        for n, p in optee.all_named_parameters():
+            required_grad[n] = p.requires_grad
+            p.requires_grad = False
+
         ### get grads
         y_hat = optee.forward_w_params(task=task, params=forward_w_params, params_for=params_for)
         if "A" in task.keys():  # quadratic objective function -> add data batch dim
@@ -272,6 +278,10 @@ class CFGD(nn.Module):
             Hd += (Hv * v).abs()
         Hd /= n_iters
 
+        ### set requires_grad back to the original values
+        for n, p in optee.all_named_parameters():
+            p.requires_grad = required_grad[n]
+
         return grads, Hd
 
     @staticmethod
@@ -285,9 +295,7 @@ class CFGD(nn.Module):
 
     def step(self, task, optee):
         optee_to_use = optee.get_deepcopy()
-        for _, p in optee.all_named_parameters():
-            p.requires_grad = False
-        
+
         ### Gauss-Jacobi quadrature # TODO: make it work w/ alphas in a tensor
         # if type(g["alpha"]) in (float, int):
         #     sample_points, sample_weights = roots_jacobi(n=self.s, alpha=-g["alpha"], beta=0, mu=False)
@@ -469,7 +477,7 @@ class CFGD_ClosedForm(nn.Module):
         loss = None
         if closure is not None:
             loss = closure()
-        
+
         ### get params for the closed form update
         A, b = task["A"], task["b"]
         R_tilde = self.get_R_tilde(task).to(self.device)
