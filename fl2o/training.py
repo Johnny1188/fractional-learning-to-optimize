@@ -100,7 +100,7 @@ def do_fit(
             unroll_meta_loss = unroll_meta_loss + loss
         elif opter.__class__.__name__.lower() in ("cfgd_closedform",):
             opter.step(task=task_sample, optee=optee)
-        elif opter.__class__.__name__.lower() in ("gd",):
+        elif opter.__class__.__name__.lower() in ("gd", "adam"):
             opter.step(task=task_sample)
         else:
             opter.step()
