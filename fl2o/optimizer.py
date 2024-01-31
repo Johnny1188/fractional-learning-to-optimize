@@ -491,7 +491,8 @@ class CFGD_ClosedForm(nn.Module):
 
                 if len(self.state[p_idx]) == 0:
                     self.state[p_idx]["step"] = 1 # iter starts from 1
-                    self.state[p_idx]["memory"] = g["init_points"]
+                    if self.version == "AT":
+                        self.state[p_idx]["memory"] = [init_p.detach().clone() for init_p in g["init_points"]]
 
                 ### get update 'd'
                 c = g["c"] if self.version == "NA" else self.state[p_idx]["memory"][0]
@@ -586,6 +587,84 @@ class GD(optim.Optimizer):
                     )
                 p.data.add_(d.detach(), alpha=-lr)
                 g["last_update"] = lr * d.detach()
+                g["last_grad"] = p.grad.detach().clone()
+                g["last_lr"] = lr
+
+        return loss
+
+
+class Adam(optim.Optimizer):
+    """
+    Adam
+    """
+    def __init__(
+        self,
+        params,
+        lr=0.1,
+        beta1=0.9,
+        beta2=0.999,
+        eps=1e-8,
+        device="cpu",
+    ):
+        defaults = dict(
+            lr=lr,
+            beta1=beta1,
+            beta2=beta2,
+            eps=eps,
+            device=device,
+        )
+        super().__init__(params, defaults)
+
+        self.device = device
+
+    def __setstate__(self, state):
+        super().__setstate__(state)
+
+    def step(self, task, closure=None):
+        loss = None
+        if closure is not None:
+            loss = closure()
+
+        for g in self.param_groups:
+            ### get params
+            params = g["params"]
+
+            ### init tracking
+            if "step" not in g:
+                g["step"] = 0
+            if "exp_avg" not in g:
+                g["exp_avg"] = torch.zeros_like(params[0].data)
+            if "exp_avg_sq" not in g:
+                g["exp_avg_sq"] = torch.zeros_like(params[0].data)
+
+            ### update params
+            for p in params:
+                if p.grad is None:
+                    continue
+
+                ### get update 'd'
+                d = p.grad.data
+
+                ### update params
+                lr = g["lr"]
+                if hasattr(lr, "__call__"):
+                    assert task is not None, "task must be provided for lr function."
+                    assert "A" in task and "b" in task, "task must have A and b."
+                    A, b = task["A"], task["b"]
+                    lr = lr(
+                        A=A,
+                        b=b,
+                        x=p.data.T,
+                        d=d.T,
+                    )
+                g["step"] += 1
+                g["exp_avg"] = g["beta1"] * g["exp_avg"] + (1 - g["beta1"]) * d
+                g["exp_avg_sq"] = g["beta2"] * g["exp_avg_sq"] + (1 - g["beta2"]) * d**2
+                exp_avg_hat = g["exp_avg"] / (1 - g["beta1"]**g["step"])
+                exp_avg_sq_hat = g["exp_avg_sq"] / (1 - g["beta2"]**g["step"])
+                p.data.add_(exp_avg_hat / (exp_avg_sq_hat.sqrt() + g["eps"]), alpha=-lr)
+
+                g["last_update"] = lr * exp_avg_hat / (exp_avg_sq_hat.sqrt() + g["eps"])
                 g["last_grad"] = p.grad.detach().clone()
                 g["last_lr"] = lr
 
