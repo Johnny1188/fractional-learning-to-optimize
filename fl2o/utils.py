@@ -42,7 +42,7 @@ def plot_log(
     fig, ax = plt.subplots(
         int(np.ceil(n_axes/2)),
         2,
-        figsize=(18, 4.5 + 6.5 * n_axes/2),
+        figsize=(18, 4.5 + 5.5 * n_axes/2),
         facecolor="w",
     )
     ax = ax.flatten()
