@@ -159,7 +159,7 @@ def meta_train(config, l2o_dict=None, l2o_dict_best=None, log=None):
         opter = _config["opter"]["opter_cls"](**_config["opter"]["opter_config"])
         meta_opter = _config["meta_training_config"]["meta_opter_cls"](
             params=opter.parameters(),
-            **_config["meta_training_config"]["meta_opter_cls"]["meta_opter_config"]
+            **_config["meta_training_config"]["meta_opter_config"]
         )
 
         ### init l2o_dict

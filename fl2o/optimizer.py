@@ -504,44 +504,43 @@ class CFGD_ClosedForm(nn.Module):
         A, b = task["A"], task["b"]
         R_tilde = self.get_R_tilde(task).to(self.device)
 
-        for g in self.param_groups:
-            ### get updated params
-            updated_params = {}
-            for p_idx, (n, p) in enumerate(optee.all_named_parameters()):
-                if p.grad is None:
-                    continue
+        ### get updated params
+        updated_params = {}
+        for p_idx, (g, (n, p)) in enumerate(zip(self.param_groups, optee.all_named_parameters())):
+            if p.grad is None:
+                continue
 
-                if len(self.state[p_idx]) == 0:
-                    self.state[p_idx]["step"] = 1 # iter starts from 1
-                    if self.version == "AT":
-                        self.state[p_idx]["memory"] = [init_p.detach().clone() for init_p in g["init_points"]]
-
-                ### get update 'd'
-                c = g["c"] if self.version == "NA" else self.state[p_idx]["memory"][0]
-                d = A @ p.data.T + b
-                d += g["gamma"] * R_tilde @ (p.data - c).T
-                d = d.T
-
-                ### update params
-                lr = g["lr"]
-                if hasattr(lr, "__call__"):
-                    lr = lr(
-                        A=A,
-                        b=b,
-                        x=p.detach().data.T,
-                        d=d.detach().T,
-                    )
-                updated_params[n] = p - lr * d
-                updated_params[n].retain_grad()
-                
-                ### update internal state
+            if len(self.state[p_idx]) == 0:
+                self.state[p_idx]["step"] = 1 # iter starts from 1
                 if self.version == "AT":
-                    self.state[p_idx]["memory"].pop(0)
-                    self.state[p_idx]["memory"].append(p.data.detach().clone())
-                self.state[p_idx]["last_update"] = lr * d.detach()
-                self.state[p_idx]["last_grad"] = p.grad.detach().clone()
-                self.state[p_idx]["last_lr"] = lr
-                self.state[p_idx]["step"] += 1
+                    self.state[p_idx]["memory"] = [init_p.detach().clone() for init_p in g["init_points"]]
+
+            ### get update 'd'
+            c = g["c"] if self.version == "NA" else self.state[p_idx]["memory"][0]
+            d = A @ p.data.T + b
+            d += g["gamma"] * R_tilde @ (p.data - c).T
+            d = d.T
+
+            ### update params
+            lr = g["lr"]
+            if hasattr(lr, "__call__"):
+                lr = lr(
+                    A=A,
+                    b=b,
+                    x=p.detach().data.T,
+                    d=d.detach().T,
+                )
+            updated_params[n] = p - lr * d
+            updated_params[n].retain_grad()
+            
+            ### update internal state
+            if self.version == "AT":
+                self.state[p_idx]["memory"].pop(0)
+                self.state[p_idx]["memory"].append(p.data.detach().clone())
+            self.state[p_idx]["last_update"] = lr * d.detach()
+            self.state[p_idx]["last_grad"] = p.grad.detach().clone()
+            self.state[p_idx]["last_lr"] = lr
+            self.state[p_idx]["step"] += 1
 
         ### update params
         for n, _ in optee.all_named_parameters():
@@ -718,37 +717,36 @@ class L2O_Update(nn.Module):
         raise NotImplementedError("zero_grad() is not supported for CFGD_ClosedForm.")
 
     def step(self, task, optee):
-        for g in self.param_groups:
+        ### get updated params
+        updated_params = {}
+        for p_idx, (g, (n, p)) in enumerate(zip(self.param_groups, optee.all_named_parameters())):
+            if len(self.state[p_idx]) == 0:
+                self.state[p_idx]["step"] = 1 # iter starts from 1
+            else:
+                self.state[p_idx]["step"] += 1
+
+            ### get update 'd'
+            d = g["update"]  # expected to be a tensor of the same shape as p
+
             ### get updated params
-            updated_params = {}
-            for p_idx, (n, p) in enumerate(optee.all_named_parameters()):
-                if len(self.state[p_idx]) == 0:
-                    self.state[p_idx]["step"] = 1 # iter starts from 1
-                else:
-                    self.state[p_idx]["step"] += 1
+            lr = g["lr"]
+            if hasattr(lr, "__call__"):
+                lr = lr( # only for quadratic objective functions
+                    A=task["A"],
+                    b=task["b"],
+                    x=p.detach().data.T,
+                    d=d.detach().T,
+                )
+            updated_params[n] = p - lr * d
+            updated_params[n].retain_grad()
 
-                ### get update 'd'
-                d = g["update"]  # expected to be a tensor of the same shape as p
+            ### update internal state
+            self.state[p_idx]["last_update"] = lr * d.detach()
+            self.state[p_idx]["last_grad"] = p.grad.detach().clone() if p.grad is not None else None
+            self.state[p_idx]["last_lr"] = lr
 
-                ### get updated params
-                lr = g["lr"]
-                if hasattr(lr, "__call__"):
-                    lr = lr( # only for quadratic objective functions
-                        A=task["A"],
-                        b=task["b"],
-                        x=p.detach().data.T,
-                        d=d.detach().T,
-                    )
-                updated_params[n] = p - lr * d
-                updated_params[n].retain_grad()
-
-                ### update internal state
-                self.state[p_idx]["last_update"] = lr * d.detach()
-                self.state[p_idx]["last_grad"] = p.grad.detach().clone() if p.grad is not None else None
-                self.state[p_idx]["last_lr"] = lr
-
-            ### update params
-            for n, _ in optee.all_named_parameters():
-                rsetattr(optee, n, updated_params[n])
+        ### update params
+        for n, _ in optee.all_named_parameters():
+            rsetattr(optee, n, updated_params[n])
 
         return None
