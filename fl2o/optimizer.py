@@ -209,12 +209,19 @@ class CFGD(nn.Module):
         beta=0,
         c=0, # integral terminal
         s=3, # number of sample points
+        version="NA", # NA: non-adaptive, AT: adaptive-terminal
+        init_points=None, # initial points for AT version
+        max_chunk_size=5_000_000, # max number of params to fit into memory
         device="cpu",
     ):
+        assert version.upper() in ("NA", "AT"), "Only NA and AT versions of CFGD are supported for now."
+        assert version.upper() != "AT" or init_points is not None, "init_points must be provided for AT version."
+
         super().__init__()
 
         self.param_groups = []
         self.state = []
+        p_idx = 0
         for p in params:
             p.retain_grad()
             self.state.append({})
@@ -226,13 +233,15 @@ class CFGD(nn.Module):
                 "c": c,
                 "s": s,
                 "device": device,
+                "version": version.upper(),
+                "init_points": init_points[p_idx] if init_points is not None else None,
             })
+            p_idx += 1
 
         self.s = s
+        self.max_chunk_size = max_chunk_size
+        self.version = version.upper()
         self.device = device
-
-    def __setstate__(self, state):
-        super().__setstate__(state)
 
     def _get_grads_diag_hess(self, optee, task, forward_w_params, params_for, n_iters=3):
         ### set requires_grad=False for all params
@@ -296,25 +305,44 @@ class CFGD(nn.Module):
     def step(self, task, optee):
         optee_to_use = optee.get_deepcopy()
 
-        ### Gauss-Jacobi quadrature # TODO: make it work w/ alphas in a tensor
-        # if type(g["alpha"]) in (float, int):
-        #     sample_points, sample_weights = roots_jacobi(n=self.s, alpha=-g["alpha"], beta=0, mu=False)
-        # elif type(g["alpha"]) == torch.Tensor:
-        #     sample_points, sample_weights = torch.zeros_like(g["alpha"]), torch.zeros_like(g["alpha"])
-        #     for i in range(len(g["alpha"])):
-        #         sample_points[i], sample_weights[i] = roots_jacobi(n=self.s, alpha=-g["alpha"][i].item(), beta=0, mu=False)
-        sample_points, sample_weights = roots_jacobi(n=self.s, alpha=-0.85, beta=0, mu=False)
-        sample_weights = torch.tensor(sample_weights, device=self.device).detach().float()
-        sample_points = torch.tensor(sample_points, device=self.device).detach().float()
+        ### Gauss-Jacobi quadrature
+        # sample_points, sample_weights = roots_jacobi(n=self.s, alpha=-0.85, beta=0, mu=False)
+        # sample_weights = torch.tensor(sample_weights, device=self.device).detach().float()
+        # sample_points = torch.tensor(sample_points, device=self.device).detach().float()
 
         ### find out where to eval fo and so partial derivatives
         deriv_eval_points = [] # fill to (n_params, param_size, s)
+        sample_points, sample_weights = dict(), dict()
         for p_idx, (n, p) in enumerate(optee_to_use.all_named_parameters()):
-            c = self.param_groups[p_idx]["c"]
+            ### prepare internal state
+            if len(self.state[p_idx]) == 0 or "step" not in self.state[p_idx]:
+                self.state[p_idx]["step"] = 1 # iter starts from 1
+                if self.version == "AT":
+                    self.state[p_idx]["memory"] = [init_p.detach().clone() for init_p in self.param_groups[p_idx]["init_points"]]
+            else:
+                self.state[p_idx]["step"] += 1
+            
+            ### get sample points and weights for the Gauss-Jacobi quadrature # TODO: vectorize
+            if type(self.param_groups[p_idx]["alpha"]) in (float, int):
+                sample_points[n], sample_weights[n] = roots_jacobi(n=self.s, alpha=-self.param_groups[p_idx]["alpha"], beta=0, mu=False)
+                sample_weights[n] = torch.tensor(sample_weights[n], device=self.device).detach().float()
+                sample_points[n] = torch.tensor(sample_points[n], device=self.device).detach().float()
+            elif type(self.param_groups[p_idx]["alpha"]) == torch.Tensor:
+                sample_points[n], sample_weights[n] = [], []
+                for alpha_idx, alpha in enumerate(self.param_groups[p_idx]["alpha"].view(-1)):
+                    sample_points[n].append(roots_jacobi(n=self.s, alpha=-alpha.item(), beta=0, mu=False)[0])
+                    sample_weights[n].append(roots_jacobi(n=self.s, alpha=-alpha.item(), beta=0, mu=False)[1])
+                ### reshape to (param_size, s)
+                sample_weights[n] = torch.tensor(sample_weights[n], device=self.device).detach().float()
+                sample_points[n] = torch.tensor(sample_points[n], device=self.device).detach().float()
+                sample_points[n] = sample_points[n].view(*p.shape, self.s)
+                sample_weights[n] = sample_weights[n].view(*p.shape, self.s)
+
+            c = self.param_groups[p_idx]["c"] if self.version == "NA" else self.state[p_idx]["memory"][0]
             delta_plus = (p.data.detach() + c).mul(0.5).unsqueeze(-1) # (param_size, 1)
             delta_minus = (p.data.detach() - c).mul(0.5).unsqueeze(-1) # (param_size, 1)
             deriv_eval_points.append(
-                delta_plus * sample_points + delta_minus
+                delta_plus * sample_points[n] + delta_minus
             ) # (param_size, s)
 
         ### get fo and so partial derivatives at s sample points
@@ -331,16 +359,15 @@ class CFGD(nn.Module):
                 ### change individual params while keeping all the other params fixed -> parameter batch dim B == param_size
                 ### split the number of params (the batch size B) into chunks of size 'chunk_size' to fit into memory
                 n_elems = p.shape.numel()
-                chunk_size = 5_000_000  # max number of params to fit into memory - TODO: parametrize
                 chunks_fos, chunks_sos = [], []
-                for start_idx in range(0, n_elems, int(np.sqrt(chunk_size))):
-                    end_idx = min(start_idx + int(np.sqrt(chunk_size)), n_elems) + 1
+                for start_idx in range(0, n_elems, int(np.sqrt(self.max_chunk_size))):
+                    end_idx = min(start_idx + int(np.sqrt(self.max_chunk_size)), n_elems) + 1
                     B = end_idx - start_idx - 1  # current batch dim
 
                     # batch of params
                     pp = p.data.detach().clone().view(-1).unsqueeze(0).repeat(B, 1)
                     changed_elems = torch.arange(start_idx, end_idx - 1)
-                    # change the elems
+                    # change the params
                     pp[torch.arange(B), changed_elems] = deriv_eval_points[p_idx][..., s_idx].view(-1)[start_idx:start_idx + B]
                     pp.requires_grad_(True)
                     # get fo and so partial derivatives
@@ -365,21 +392,16 @@ class CFGD(nn.Module):
         ### get updated params
         updated_params = dict()
         for p_idx, (n, p) in enumerate(optee.all_named_parameters()):
-            ### update state
-            if len(self.state[p_idx]) == 0 or "step" not in self.state[p_idx]:
-                self.state[p_idx]["step"] = 1 # iter starts from 1
-            else:
-                self.state[p_idx]["step"] += 1
-
             ### prepare update 'd'
             g = self.param_groups[p_idx]
             to_sum = torch.stack(fos[p_idx]) # (s, param_size)
-            
+
             if compute_so[p_idx]:
-                to_sum += g["beta"] * (p.data - g["c"]).abs() * torch.stack(sos[p_idx]) # (s, param_size)
+                c = g["c"] if self.version == "NA" else self.state[p_idx]["memory"][0]
+                to_sum += g["beta"] * (p.data - c).abs() * torch.stack(sos[p_idx]) # (s, param_size)
 
             C_alpha_beta = self.get_c_alpha_beta(alpha=g["alpha"], beta=g["beta"])
-            d = C_alpha_beta * to_sum.transpose(0, -1).mul(sample_weights).transpose(0, -1).sum(dim=0) # (param_size)
+            d = C_alpha_beta * to_sum.movedim(0, -1).mul(sample_weights[n]).sum(dim=-1) # (param_size)
 
             ### get updated params
             lr = g["lr"]
@@ -394,6 +416,9 @@ class CFGD(nn.Module):
             updated_params[n].retain_grad()
 
             ### update internal state
+            if self.version == "AT":
+                self.state[p_idx]["memory"].pop(0)
+                self.state[p_idx]["memory"].append(p.data.detach().clone())
             self.state[p_idx]["last_update"] = lr * d.detach()
             self.state[p_idx]["last_grad"] = p.grad.detach().clone() if p.grad is not None else None
             self.state[p_idx]["last_lr"] = lr
