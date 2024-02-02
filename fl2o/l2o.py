@@ -166,7 +166,7 @@ class L2O(nn.Module):
             elif act_fn == "identity":
                 pass
             elif act_fn == "diag":
-                out = torch.diag(out)
+                out = torch.diag(out.view(-1))
             elif act_fn == "alpha_to_gamma":  # gamma = beta - (1 - alpha)/(2 - alpha)
                 assert "beta" in config, "config must have key 'beta'"
                 out = config["beta"] - (1 - out) / (2 - out)
