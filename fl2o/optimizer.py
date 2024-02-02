@@ -488,9 +488,6 @@ class CFGD_ClosedForm(nn.Module):
         #         else:
         #             print(f"[WARNING] p.grad is None for {p}.")
 
-    def __setstate__(self, state):
-        super().__setstate__(state)
-
     def get_R_tilde(self, task):
         R_tilde = torch.diag(torch.sqrt(torch.diag(task["A"])))
         return R_tilde
@@ -547,15 +544,8 @@ class CFGD_ClosedForm(nn.Module):
                 self.state[p_idx]["step"] += 1
 
         ### update params
-        if hasattr(optee, "layers"):
-            for l_idx in range(len(optee.layers)):
-                if len(list(optee.layers[l_idx].parameters())) == 0:
-                    continue
-                optee.layers[l_idx].weight = updated_params[f"layers.{l_idx}.weight"]
-                optee.layers[l_idx].bias = updated_params[f"layers.{l_idx}.bias"]
-        else:
-            for n, _ in optee.all_named_parameters():
-                setattr(optee, n, updated_params[n])
+        for n, _ in optee.all_named_parameters():
+            rsetattr(optee, n, updated_params[n])
 
         return loss
 
@@ -694,3 +684,71 @@ class Adam(optim.Optimizer):
                 g["last_lr"] = lr
 
         return loss
+
+
+class L2O_Update(nn.Module):
+    """
+    Placeholder Optimizer for applying L2O updates.
+    """
+
+    def __init__(
+        self,
+        params,
+        lr=0.1,
+        device="cpu",
+    ):
+        super().__init__()
+
+        self.param_groups = []
+        self.state = []
+        for p in params:
+            p.retain_grad()
+            self.state.append({})
+            self.param_groups.append(
+                {
+                    "param_shape": p.shape,
+                    "lr": lr,
+                    "device": device,
+                }
+            )
+
+        self.device = device
+    
+    def zero_grad(self):
+        raise NotImplementedError("zero_grad() is not supported for CFGD_ClosedForm.")
+
+    def step(self, task, optee):
+        for g in self.param_groups:
+            ### get updated params
+            updated_params = {}
+            for p_idx, (n, p) in enumerate(optee.all_named_parameters()):
+                if len(self.state[p_idx]) == 0:
+                    self.state[p_idx]["step"] = 1 # iter starts from 1
+                else:
+                    self.state[p_idx]["step"] += 1
+
+                ### get update 'd'
+                d = g["update"]  # expected to be a tensor of the same shape as p
+
+                ### get updated params
+                lr = g["lr"]
+                if hasattr(lr, "__call__"):
+                    lr = lr( # only for quadratic objective functions
+                        A=task["A"],
+                        b=task["b"],
+                        x=p.detach().data.T,
+                        d=d.detach().T,
+                    )
+                updated_params[n] = p - lr * d
+                updated_params[n].retain_grad()
+
+                ### update internal state
+                self.state[p_idx]["last_update"] = lr * d.detach()
+                self.state[p_idx]["last_grad"] = p.grad.detach().clone() if p.grad is not None else None
+                self.state[p_idx]["last_lr"] = lr
+
+            ### update params
+            for n, _ in optee.all_named_parameters():
+                rsetattr(optee, n, updated_params[n])
+
+        return None
