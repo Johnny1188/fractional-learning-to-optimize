@@ -20,7 +20,8 @@ class L2O(nn.Module):
         base_opter_config,
         params_to_optimize=None, # a dictionary of base opter attributes to optimize
     ):
-        assert base_opter_cls.__name__ in ["FGD", "CFGD_ClosedForm", "CFGD"], "base_opter_cls not supported"
+        assert base_opter_cls.__name__ in ["FGD", "CFGD_ClosedForm", "CFGD", "L2O_Update"], \
+            "base_opter_cls not supported"
         assert params_to_optimize is not None, "params_to_optimize must be specified"
         assert type(in_features) in [list, tuple], "in_features must be a list or tuple"
         assert len(in_features) <= in_dim, "in_features must have length equal or smaller than out_dim"
@@ -39,7 +40,8 @@ class L2O(nn.Module):
         self.rnn2 = nn.LSTMCell(hidden_sz, hidden_sz)
         self.out_layer = nn.Linear(hidden_sz, out_dim)
         self.n_iters = None
-        self.l2o_inp_batch_dim = 1 if "grad" in self.in_features else None
+        # self.l2o_inp_batch_dim = 1 if "grad" in self.in_features else None
+        self.l2o_inp_batch_dim = 1
         self.per_param = "grad" in self.in_features  # whether to predict baseopter params for each param separately
         
         ### preproc params
@@ -104,6 +106,9 @@ class L2O(nn.Module):
         
         if "loss" in self.in_features:
             inp.append(resize_fn(loss))
+        
+        if "log_loss" in self.in_features:
+            inp.append(resize_fn(loss.log()))
 
         if "iter_num_enc" in self.in_features:
             inp.append(resize_fn(torch.tensor(self._get_iter_num_enc(iter_num), dtype=torch.float32, device=DEVICE)))
@@ -116,18 +121,23 @@ class L2O(nn.Module):
             grads_abs = np.mean([p.grad.abs().mean().item() for p in optee.parameters()])
             inp.append(resize_fn(torch.tensor(grads_abs, dtype=torch.float32, device=DEVICE)))
 
+        if "log_grad_mean_abs" in self.in_features:
+            log_grads_abs = np.mean([p.grad.abs().mean().log().item() for p in optee.parameters()])
+            inp.append(resize_fn(torch.tensor(log_grads_abs, dtype=torch.float32, device=DEVICE)))
+
+        if "log_grad_std" in self.in_features:
+            log_grads_std = np.var([p.grad.std().log().item() for p in optee.parameters()])
+            inp.append(resize_fn(torch.tensor(log_grads_std, dtype=torch.float32, device=DEVICE)))
+
         inp = torch.cat(inp, dim=-1).detach() # (B, inp_dim)
+        if inp.ndim == 1:
+            inp = inp.unsqueeze(0)
         return inp
 
     def zero_grad(self):
-        for n, p in self.optee[0].all_named_parameters():
-            if p.grad is not None:
-                p.grad.zero_()
-            # else:
-            #     print(f"[WARNING] Parameter {n} has no grad")
+        raise NotImplementedError
 
     def prep_for_optim_run(self, optee, n_iters):
-        self.optee = [optee] # don't include optee's params in the optimizer
         self.base_opter = self.base_opter_cls(params=optee.parameters(), **self.base_opter_config)
         self.n_iters = n_iters
         if "grad" in self.in_features: # predicting baseopter params for each param separately
