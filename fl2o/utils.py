@@ -133,7 +133,8 @@ def plot_metric(
     save_fig_to_path=None,
 ):
     ### plot comparison
-    fig = plt.figure(figsize=(9, 6))
+    # fig = plt.figure(figsize=(9, 6))
+    fig = plt.figure()
     ax = fig.add_subplot(111)
 
     ### baseline optimizers
@@ -158,7 +159,7 @@ def plot_metric(
                 y=y,
                 label=baseline_name,
                 ax=ax,
-                **plot_config["main"],
+                **plot_config,
             )
         else:
             sns.lineplot(
@@ -177,12 +178,13 @@ def plot_metric(
                 y_removed_start = y_std[:conv_window - 1]
                 y_std = np.convolve(y_std, np.ones(conv_window), "valid") / conv_window
                 y_std = np.concatenate([y_removed_start, y_std])
-            if plot_config and plot_config["err_bars"]:
-                sns.lineplot(
-                    x=x,
-                    y=y_std,
-                    ax=ax,
-                    **plot_config["err_bars"],
+            if plot_config and "color" in plot_config:
+                ax.fill_between(
+                    x,
+                    y - y_std,
+                    y + y_std,
+                    alpha=0.2,
+                    color=plot_config["color"],
                 )
             else:
                 ax.fill_between(
@@ -214,7 +216,7 @@ def plot_metric(
                 y=y,
                 label=fr"{l2o_name}",
                 ax=ax,
-                **plot_config["main"],
+                **plot_config,
             )
         else:
             sns.lineplot(
@@ -233,12 +235,13 @@ def plot_metric(
                 y_removed_start = y_std[:conv_window - 1]
                 y_std = np.convolve(y_std, np.ones(conv_window), "valid") / conv_window
                 y_std = np.concatenate([y_removed_start, y_std])
-            if plot_config and plot_config["err_bars"]:
-                sns.lineplot(
-                    x=x,
-                    y=y_std,
-                    ax=ax,
-                    **plot_config["err_bars"],
+            if plot_config and "color" in plot_config:
+                ax.fill_between(
+                    x,
+                    y - y_std,
+                    y + y_std,
+                    alpha=0.2,
+                    color=plot_config["color"],
                 )
             else:
                 ax.fill_between(
@@ -266,7 +269,7 @@ def plot_metric(
         ax.set_ylim(0.0, None)
 
     # legend
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.25), ncol=2)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.4), ncol=2)
     legend = ax.get_legend()
     for legend_handle in legend.legendHandles:
         legend_handle.set_linewidth(3.0)
@@ -321,3 +324,37 @@ def plot_metric(
     ### save the figure
     if save_fig_to_path is not None:
         fig.savefig(save_fig_to_path, bbox_inches="tight")
+
+
+def apply_publication_plt_settings():
+    ### publication figure settings:
+    # plt.rc("font", family="serif")
+    # use times roman font
+    plt.rc("font", family="Times New Roman")
+
+    plt.rc("pdf", fonttype=42)
+    plt.rc("ps", fonttype=42)
+
+    plt.rc("legend", fontsize=13)
+    plt.rc("xtick", labelsize=13)
+    plt.rc("ytick", labelsize=13)
+    plt.rc("axes", labelsize=13)
+    plt.rc("axes", titlesize=13)
+    plt.rc("axes", linewidth=0.5)
+    plt.rc("axes", labelpad=10)
+
+    plt.rc("lines", linewidth=1.)
+    # set default color palette
+    # c_palette = list(plt.cm.tab10.colors)
+    # switch third and fourth color
+    # c_palette[2], c_palette[3] = c_palette[3], c_palette[2]
+    # plt.rc("axes", prop_cycle=plt.cycler("color", c_palette))
+
+    plt.rc("figure", dpi=300)
+    plt.rc("figure", figsize=(5, 3.5))
+    # plt.rc("figure", figsize=(2.5, 2.5))
+
+    plt.rc("savefig", dpi=300)
+    plt.rc("savefig", format="pdf")
+    plt.rc("savefig", bbox="tight")
+    plt.rc("savefig", pad_inches=0.1)
