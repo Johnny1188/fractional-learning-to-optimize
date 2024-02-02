@@ -145,25 +145,9 @@ def do_fit(
     return log, optee, opter
 
 
-def meta_train(
-    opter_cls,
-    opter_config,
-    optee_cls,
-    optee_config,
-    data_cls,
-    data_config,
-    n_iters,
-    meta_opter_cls,
-    meta_opter_config,
-    n_runs,
-    unroll,
-    additional_metrics=None,
-    loggers=None,
-    l2o_dict=None,
-    l2o_dict_best=None,
-    log=None,
-    ckpt_config=None,
-):
+def meta_train(config, l2o_dict=None, l2o_dict_best=None, log=None):
+    _config = copy.deepcopy(config)
+
     ### keep meta-training previous
     if l2o_dict is not None:
         assert l2o_dict_best is not None and log is not None
@@ -172,14 +156,17 @@ def meta_train(
         print(f"[INFO] Starting meta-training.")
         
         ### init opter and meta_opter
-        opter = opter_cls(**opter_config)
-        meta_opter = meta_opter_cls(params=opter.parameters(), **meta_opter_config)
+        opter = _config["opter"]["opter_cls"](**_config["opter"]["opter_config"])
+        meta_opter = _config["meta_training_config"]["meta_opter_cls"](
+            params=opter.parameters(),
+            **_config["meta_training_config"]["meta_opter_cls"]["meta_opter_config"]
+        )
 
         ### init l2o_dict
         l2o_dict = {
             "opter": opter,
             "meta_opter": meta_opter,
-            "unroll": unroll,
+            "unroll": _config["meta_training_config"]["unroll"],
         }
         l2o_dict_best = {"best_loss_sum": np.inf, "best_l2o_dict": None, "run_num": None} # early stopping
 
@@ -189,6 +176,7 @@ def meta_train(
         }
 
     ### meta-train
+    n_runs = _config["meta_training_config"]["n_runs"]
     l2o_dict["opter"].train()
     print(f"[INFO] Meta-training starts.")
     for run_num in range(1, n_runs + 1):
@@ -196,14 +184,14 @@ def meta_train(
         _log, _, _ = do_fit(
             opter_cls=None,
             opter_config=None,
-            optee_cls=optee_cls,
-            optee_config=optee_config,
-            data_cls=data_cls,
-            data_config=data_config,
-            n_iters=n_iters,
+            optee_cls=_config["optee"]["optee_cls"],
+            optee_config=_config["optee"]["optee_config"],
+            data_cls=_config["data"]["data_cls"],
+            data_config=_config["data"]["data_config"],
+            n_iters=_config["n_iters"],
             l2o_dict=l2o_dict,
             in_meta_training=True,
-            additional_metrics=additional_metrics,
+            additional_metrics=_config["additional_metrics"],
         )
         log["loss"].append(_log["loss"])
         log["loss_sum"].append(np.sum(_log["loss"]))
@@ -214,8 +202,8 @@ def meta_train(
             f"sum(loss): {log['loss_sum'][-1]:.3f}"
             f"  last(loss): {log['loss_last'][-1]:.3f}"
         )
-        if loggers is not None:
-            for logger in loggers:
+        if _config["meta_training_config"]["loggers"] is not None:
+            for logger in _config["meta_training_config"]["loggers"]:
                 if run_num % logger["every_nth_run"] == 0:
                     logger["logger_fn"](run_log=_log, meta_training_log=log, run_num=run_num)
 
@@ -231,6 +219,7 @@ def meta_train(
             print(f"       > new best loss sum: {l2o_dict_best['best_loss_sum']:.3f}")
 
         ### save checkpoint
+        ckpt_config = _config["ckpt_config"]
         if ckpt_config is not None:
             assert "ckpt_every_nth_run" in ckpt_config, "ckpt_every_nth_run not in ckpt_config"
             if ckpt_config["ckpt_every_nth_run"] is not None and run_num % ckpt_config["ckpt_every_nth_run"] == 0:
@@ -239,14 +228,18 @@ def meta_train(
                         "l2o_dict": l2o_dict,
                         "l2o_dict_best": l2o_dict_best,
                         "log": log,
+                        "config": _config,
                     }, os.path.join(ckpt_config["ckpt_dir_meta_training"], f"{run_num}.pt"),
                     pickle_module=dill,
                 )
 
     ### finalize l2o_dict_best
-    l2o_dict_best["best_l2o_dict"]["opter"] = opter_cls(**opter_config)
+    l2o_dict_best["best_l2o_dict"]["opter"] = _config["opter"]["opter_cls"](**_config["opter"]["opter_config"])
     l2o_dict_best["best_l2o_dict"]["opter"].load_state_dict(l2o_dict_best["best_l2o_dict"]["opter_state_dict"])
-    l2o_dict_best["best_l2o_dict"]["meta_opter"] = meta_opter_cls(params=l2o_dict_best["best_l2o_dict"]["opter"].parameters(), **meta_opter_config)
+    l2o_dict_best["best_l2o_dict"]["meta_opter"] = _config["meta_training_config"]["meta_opter_cls"](
+        params=l2o_dict_best["best_l2o_dict"]["opter"].parameters(),
+        **_config["meta_training_config"]["meta_opter_cls"]["meta_opter_config"],
+    )
     l2o_dict_best["best_l2o_dict"]["meta_opter"].load_state_dict(l2o_dict_best["best_l2o_dict"]["meta_opter_state_dict"])
 
     return l2o_dict, l2o_dict_best, log
