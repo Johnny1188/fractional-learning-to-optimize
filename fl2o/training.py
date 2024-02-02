@@ -238,7 +238,7 @@ def meta_train(config, l2o_dict=None, l2o_dict_best=None, log=None):
     l2o_dict_best["best_l2o_dict"]["opter"].load_state_dict(l2o_dict_best["best_l2o_dict"]["opter_state_dict"])
     l2o_dict_best["best_l2o_dict"]["meta_opter"] = _config["meta_training_config"]["meta_opter_cls"](
         params=l2o_dict_best["best_l2o_dict"]["opter"].parameters(),
-        **_config["meta_training_config"]["meta_opter_cls"]["meta_opter_config"],
+        **_config["meta_training_config"]["meta_opter_config"],
     )
     l2o_dict_best["best_l2o_dict"]["meta_opter"].load_state_dict(l2o_dict_best["best_l2o_dict"]["meta_opter_state_dict"])
 
