@@ -7,7 +7,7 @@ from scipy.special import gamma
 from scipy.special import roots_jacobi
 import numpy as np
 
-from fl2o.utils import rsetattr, rgetattr
+from fl2o.utils import rsetattr, rgetattr, roots_jacobi_vectorized
 
 
 class FGD(nn.Module):
@@ -328,13 +328,22 @@ class CFGD(nn.Module):
                 sample_weights[n] = torch.tensor(sample_weights[n], device=self.device).detach().float()
                 sample_points[n] = torch.tensor(sample_points[n], device=self.device).detach().float()
             elif type(self.param_groups[p_idx]["alpha"]) == torch.Tensor:
-                sample_points[n], sample_weights[n] = [], []
-                for alpha_idx, alpha in enumerate(self.param_groups[p_idx]["alpha"].view(-1)):
-                    sample_points[n].append(roots_jacobi(n=self.s, alpha=-alpha.item(), beta=0, mu=False)[0])
-                    sample_weights[n].append(roots_jacobi(n=self.s, alpha=-alpha.item(), beta=0, mu=False)[1])
+                ##### DEPRECATED (too slow) #####
+                # sample_points[n], sample_weights[n] = [], []
+                # for alpha in self.param_groups[p_idx]["alpha"].view(-1):
+                #     roots = roots_jacobi(n=self.s, alpha=-alpha.item(), beta=0, mu=False)
+                #     sample_points[n].append(roots[0])
+                #     sample_weights[n].append(roots[1])
+                # ### reshape to (param_size, s)
+                # sample_weights[n] = torch.tensor(sample_weights[n], device=self.device).detach().float().view(*p.shape, self.s)
+                # sample_points[n] = torch.tensor(sample_points[n], device=self.device).detach().float().view(*p.shape, self.s)
+                #####
+                sample_points[n], sample_weights[n] = roots_jacobi_vectorized(
+                    N=self.s,
+                    alpha=-self.param_groups[p_idx]["alpha"].detach().view(-1),
+                    beta=torch.zeros_like(self.param_groups[p_idx]["alpha"].view(-1)),
+                )
                 ### reshape to (param_size, s)
-                sample_weights[n] = torch.tensor(sample_weights[n], device=self.device).detach().float()
-                sample_points[n] = torch.tensor(sample_points[n], device=self.device).detach().float()
                 sample_points[n] = sample_points[n].view(*p.shape, self.s)
                 sample_weights[n] = sample_weights[n].view(*p.shape, self.s)
 
