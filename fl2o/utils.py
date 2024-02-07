@@ -263,6 +263,7 @@ def plot_metric(
     if log_metric:
         metric_as_label = f"{metric_as_label} (log scale)"
     ax.set_ylabel(metric_as_label)
+    # ax.set_ylabel(r"$f\,$: Objective")
 
     # scale of y-axis
     if log_metric:
@@ -329,14 +330,17 @@ def plot_metric(
         fig.savefig(save_fig_to_path, bbox_inches="tight")
 
 
-def plot_strategy(to_plot, y_label, save_fig_to_path=None):
+def plot_strategy(to_plot, y_label, save_fig_to_path=None, mean_to_plot=None):
     fig = plt.figure()
     # fig.suptitle(rf"L2O-CFGD: {plot_plot_label}", fontsize=16)
 
     ax = fig.add_subplot(111)
 
-    plt.plot(to_plot, alpha=0.2, color="grey")
-    plt.plot(to_plot.mean(-1), color="orange", linewidth=2)
+    plt.plot(to_plot, alpha=0.4, color="grey")
+    if mean_to_plot is not None:
+        plt.plot(mean_to_plot, color="orange", linewidth=2.5)
+    else:
+        plt.plot(to_plot.mean(-1), color="orange", linewidth=2.5)
     ax.set_xlabel("Iteration")
     ax.set_ylabel(y_label)
 
@@ -351,6 +355,11 @@ def plot_strategy(to_plot, y_label, save_fig_to_path=None):
     x_ticks = ax.get_xticks()
     x_ticks = np.linspace(0, to_plot.shape[0], 3)
     ax.set_xticks(x_ticks)
+
+    # x-ticks
+    y_ticks = ax.get_yticks()
+    y_ticks = [y_ticks[idx] for idx in range(1, len(y_ticks) - 1, len(y_ticks) // 3)]
+    ax.set_yticks(y_ticks)
 
     ### remove top and right axis
     ax.spines["right"].set_visible(False)
@@ -378,9 +387,9 @@ def plot_strategy(to_plot, y_label, save_fig_to_path=None):
 
 def apply_publication_plt_settings(font_size=15, dpi=300, figsize=(4, 2.5)):
     ### publication figure settings:
-    # plt.rc("font", family="serif")
     # use times roman font
-    plt.rc("font", family="Times New Roman")
+    # plt.rc("font", family="Times New Roman")
+    plt.rc("font", family="sans-serif")
 
     plt.rc("pdf", fonttype=42)
     plt.rc("ps", fonttype=42)
@@ -507,3 +516,17 @@ def roots_jacobi_vectorized(N, alpha, beta):
     ).T
 
     return nodes, weights
+
+
+def dict_to_str(d):
+    inner_str = ""
+    for k, v in d.items():
+        if callable(v):
+            try:
+                inner_str += f"{k}={v.__name__}_"
+            except:
+                inner_str += f"{k}={v.__class__.__name__}_"
+        else:
+            inner_str += f"{k}={v}_"
+    inner_str = inner_str[:-1]
+    return "{" + inner_str + "}"
