@@ -340,7 +340,10 @@ class CFGD(nn.Module):
                 #####
                 sample_points[n], sample_weights[n] = roots_jacobi_vectorized(
                     N=self.s,
-                    alpha=-self.param_groups[p_idx]["alpha"].detach().view(-1),
+                    alpha=-1 * torch.clamp(
+                        self.param_groups[p_idx]["alpha"].detach().view(-1),
+                        max=0.9999,
+                    ),
                     beta=torch.zeros_like(self.param_groups[p_idx]["alpha"].view(-1)),
                 )
                 ### reshape to (param_size, s)
@@ -407,7 +410,7 @@ class CFGD(nn.Module):
 
             if compute_so[p_idx]:
                 c = g["c"] if self.version == "NA" else self.state[p_idx]["memory"][0]
-                to_sum += g["beta"] * (p.data - c).abs() * torch.stack(sos[p_idx]) # (s, param_size)
+                to_sum += g["beta"] * (p.detach().data - c).abs() * torch.stack(sos[p_idx]) # (s, param_size)
 
             C_alpha_beta = self.get_c_alpha_beta(alpha=g["alpha"], beta=g["beta"])
             d = C_alpha_beta * to_sum.movedim(0, -1).mul(sample_weights[n]).sum(dim=-1) # (param_size)
