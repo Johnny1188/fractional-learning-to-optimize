@@ -121,3 +121,50 @@ class MetaParameter(MetaModule):
 
     def forward(self):
         return self.param
+
+
+class MetaBatchNorm1d(MetaModule):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        ignore = nn.BatchNorm1d(*args, **kwargs)
+
+        self.num_features = ignore.num_features
+        self.eps = ignore.eps
+        self.momentum = ignore.momentum
+        self.affine = ignore.affine
+        self.track_running_stats = ignore.track_running_stats
+
+        if self.affine:
+            self.register_buffer("weight", ignore.weight.data.clone().to(DEVICE).requires_grad_(True))
+            self.register_buffer("bias", ignore.bias.data.clone().to(DEVICE).requires_grad_(True))
+        else:
+            self.register_parameter("weight", None)
+            self.register_parameter("bias", None)
+
+        if self.track_running_stats:
+            self.register_buffer("running_mean", torch.zeros(self.num_features))
+            self.register_buffer("running_var", torch.ones(self.num_features))
+        else:
+            self.register_parameter("running_mean", None)
+            self.register_parameter("running_var", None)
+
+    def forward(self, x):
+        return F.batch_norm(
+            x,
+            self.running_mean,
+            self.running_var,
+            self.weight,
+            self.bias,
+            self.training or not self.track_running_stats,
+            self.momentum,
+            self.eps,
+        )
+
+    def named_leaves(self):
+        named_leaves = [("weight", self.weight), ("bias", self.bias)]
+        if self.track_running_stats:
+            named_leaves += [
+                ("running_mean", self.running_mean),
+                ("running_var", self.running_var),
+            ]
+        return named_leaves

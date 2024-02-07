@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from fl2o.optimizee_modules import MetaModule, MetaLinear, MetaParameter
+from fl2o.optimizee_modules import MetaModule, MetaLinear, MetaParameter, MetaBatchNorm1d
 
 
 class Optee(nn.Module):
@@ -28,7 +28,9 @@ class MLPOptee(MetaModule):
         out_size=10,
         act_fn=nn.ReLU(),
         out_act_fn=None,
+        batch_norm=False,
     ):
+        assert not batch_norm, "batch_norm not yet fully implemented"
         super().__init__()
 
         self.layer_sizes = layer_sizes
@@ -36,11 +38,14 @@ class MLPOptee(MetaModule):
         self.out_size = out_size
         self.act_fn = act_fn
         self.out_act_fn = out_act_fn
+        self.batch_norm = batch_norm
 
         ### init layers
         layers = []
         for i, layer_size in enumerate(layer_sizes):
             layers.append(MetaLinear(inp_size, layer_size))
+            if batch_norm:
+                layers.append(MetaBatchNorm1d(num_features=layer_size))
             layers.append(act_fn)
             inp_size = layer_size
         layers.append(MetaLinear(inp_size, out_size))
@@ -55,6 +60,7 @@ class MLPOptee(MetaModule):
             out_size=self.out_size,
             act_fn=self.act_fn,
             out_act_fn=self.out_act_fn,
+            batch_norm=self.batch_norm,
         )
         my_params = self.all_named_parameters(to_dict=True)
         for n, p in optee_copy.all_named_parameters():
@@ -82,6 +88,18 @@ class MLPOptee(MetaModule):
                     x = (x @ l.weight.T).unsqueeze(1).expand(-1, params.shape[0], -1) + params
                 else:
                     x = l(x)
+            elif "batchnorm" in l.__class__.__name__.lower():
+                if l.training:
+                    m, v_unb, v_b = x.mean(0), x.var(0, unbiased=False), x.var(0, unbiased=True)
+                    x = (x - m) / (torch.sqrt(v_unb) + l.eps) * l.weight + l.bias
+                    # if l.running_mean.ndim != m.ndim:
+                    #     l.running_mean = l.running_mean.unsqueeze(0).repeat(m.shape[0], 1)
+                    # if l.running_var.ndim != v_b.ndim:
+                    #     l.running_var = l.running_var.unsqueeze(0).repeat(v_b.shape[0], 1)
+                    # l.running_mean = (1 - l.momentum) * l.running_mean + l.momentum * m
+                    # l.running_var = (1 - l.momentum) * l.running_var + l.momentum * v_b
+                else:
+                    x = (x - l.running_mean) / (torch.sqrt(l.running_var) + l.eps) * l.weight + l.bias
             else:
                 x = l(x) # activation
         return x
