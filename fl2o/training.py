@@ -10,7 +10,6 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch import nn
 
-DEVICE = os.getenv("DEVICE", "cpu")
 
 
 def do_fit(
@@ -26,7 +25,7 @@ def do_fit(
     additional_metrics=None,
 ):
     ### init optee
-    optee = optee_cls(**optee_config).to(DEVICE)
+    optee = optee_cls(**optee_config).to(data_config["device"])
     optee.train()
 
     ### init opter
@@ -76,7 +75,7 @@ def do_fit(
         y_hat = optee(task=task_sample)
         loss = task_sample["loss_fn"](y_hat=y_hat)
         loss.backward(retain_graph=in_meta_training is True)
-        
+
         ### check for NaNs in optee grads
         for p in optee.parameters():
             if p.grad is not None and torch.isnan(p.grad).any():

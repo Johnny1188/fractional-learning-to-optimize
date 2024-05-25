@@ -6,6 +6,20 @@ from copy import deepcopy
 import torch
 
 
+def dict_to_str(d):
+    inner_str = ""
+    for k, v in d.items():
+        if callable(v):
+            try:
+                inner_str += f"{k}={v.__name__}_"
+            except:
+                inner_str += f"{k}={v.__class__.__name__}_"
+        else:
+            inner_str += f"{k}={v}_"
+    inner_str = inner_str[:-1]
+    return "{" + inner_str + "}"
+
+
 def rsetattr(obj, attr, val):
     pre, _, post = attr.rpartition(".")
     return setattr(rgetattr(obj, pre) if pre else obj, post, val)
@@ -44,7 +58,7 @@ def plot_log(
     fig, ax = plt.subplots(
         int(np.ceil(n_axes/2)),
         2,
-        figsize=(18, 4.5 + 5.5 * n_axes/2),
+        figsize=(10, 2.5 + 3 * n_axes/2),
         facecolor="w",
     )
     ax = ax.flatten()
@@ -88,7 +102,7 @@ def plot_log(
             )
 
             ### design
-            ax[j].legend(loc="upper center", bbox_to_anchor=(0.5, 1.26), ncol=2, fontsize=14, frameon=False)
+            ax[j].legend(loc="upper center", bbox_to_anchor=(0.5, 1.45), ncol=1, fontsize=12, frameon=False)
             ax[j].set_xlabel("iteration", fontsize=14)
             ax[j].set_ylabel(metric, fontsize=14)
             ax[j].tick_params(axis="both", which="major", labelsize=12)
@@ -109,10 +123,10 @@ def plot_log(
             if min_max_y_config is not None and metric in min_max_y_config:
                 ax[j].set_ylim(min_max_y_config[metric])
     
-    plt.tight_layout(h_pad=2.5)
+    plt.tight_layout()
 
     if save_to is not None:
-        fig.savefig(save_to, bbox_inches="tight", h_pad=2.5)
+        fig.savefig(save_to, bbox_inches="tight")
     
     plt.show()
 
@@ -290,6 +304,10 @@ def plot_metric(
         # ax.set_yticks(y_ticks)
 
         pass
+        ax.set_ylim(8**(-1), 3.)
+        ax.set_yticks([0.3, 1, 2])
+        ax.set_yticklabels([0.3, 1, 2])
+        
         # ax.set_ylim(15**(-1), 8**2)
         # ax.set_yticks([0.3, 1, 2])
         # ax.set_yticklabels([0.3, 1, 2])
@@ -385,6 +403,7 @@ def plot_strategy(to_plot, y_label, save_fig_to_path=None, mean_to_plot=None):
 
     # plt.show()
 
+
 def apply_publication_plt_settings(font_size=15, dpi=300, figsize=(4, 2.5)):
     ### publication figure settings:
     # use times roman font
@@ -400,7 +419,7 @@ def apply_publication_plt_settings(font_size=15, dpi=300, figsize=(4, 2.5)):
     plt.rc("axes", labelsize=font_size)
     plt.rc("axes", titlesize=font_size)
     plt.rc("axes", linewidth=0.5)
-    plt.rc("axes", labelpad=15)
+    plt.rc("axes", labelpad=12)
 
     plt.rc("lines", linewidth=1.)
     # set default color palette

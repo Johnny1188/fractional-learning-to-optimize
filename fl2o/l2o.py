@@ -99,7 +99,7 @@ class L2O(nn.Module):
         resize_fn = lambda x: x.unsqueeze(0)  # resizing for features
 
         if "grad" in self.in_features:
-            optee_grads = torch.cat([p.grad.view(-1, 1) for p in optee.parameters()], dim=0)
+            optee_grads = torch.cat([p.grad.view(-1, 1) for p in optee.parameters() if p.requires_grad == True], dim=0)
             optee_grads = self._preproc_grad(optee_grads)
             inp.append(optee_grads)
             resize_fn = lambda x: x.unsqueeze(0).expand(optee_grads.shape[0], -1)
@@ -141,7 +141,7 @@ class L2O(nn.Module):
         self.base_opter = self.base_opter_cls(params=optee.parameters(), **self.base_opter_config)
         self.n_iters = n_iters
         if "grad" in self.in_features: # predicting baseopter params for each param separately
-            self.l2o_inp_batch_dim = sum([p.numel() for p in optee.parameters()])
+            self.l2o_inp_batch_dim = sum([p.numel() for p in optee.parameters() if p.requires_grad])
         self._reset_hidden()
         self._reset_cell()
 

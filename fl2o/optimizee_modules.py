@@ -4,7 +4,7 @@ from torch import nn
 import torch.nn.functional as F
 
 DEVICE = os.getenv("DEVICE", "cpu")
-
+# DEVICE = "cuda:0"
 
 class MetaModule(nn.Module):
     # adopted from: Adrien Ecoffet https://github.com/AdrienLE
