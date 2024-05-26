@@ -415,10 +415,10 @@ class CFGD(nn.Module):
 
                     # extract only the fo and so derivatives wrt. to the changed params
                     chunks_fos.append(
-                        curr_fos.view(B, p.shape.numel())[torch.arange(B), changed_elems]
+                        curr_fos.detach().view(B, p.shape.numel())[torch.arange(B), changed_elems]
                     )
                     chunks_sos.append(
-                        curr_sos.view(B, p.shape.numel())[torch.arange(B), changed_elems]
+                        curr_sos.detach().view(B, p.shape.numel())[torch.arange(B), changed_elems]
                     )
                 fos[p_idx].append(torch.cat(chunks_fos).view(*p.shape))
                 if compute_so[p_idx]:
@@ -448,7 +448,7 @@ class CFGD(nn.Module):
                 beta = g["beta"]
                 if type(beta) == torch.Tensor and beta.shape != p.shape and len(beta) > 1:
                     beta = beta[self.state[p_idx]["step"] - 1]
-                to_sum += beta * (p.detach().data - c).abs() * torch.stack(sos[p_idx]) # (s, param_size)
+                to_sum += beta * (p - c).abs() * torch.stack(sos[p_idx]) # (s, param_size)
 
             # prepare hyperparams
             alpha, beta = g["alpha"], g["beta"]
