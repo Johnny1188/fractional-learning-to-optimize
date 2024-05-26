@@ -2,6 +2,7 @@ import functools
 import numpy as np
 from matplotlib import pyplot as plt
 import seaborn as sns
+from torchviz import make_dot
 from copy import deepcopy
 import torch
 
@@ -33,13 +34,14 @@ def rgetattr(obj, attr, *args):
 
 
 def plot_log(
-    runs,
-    only_metrics=None,
-    log_metrics=None,
-    conv_win=1,
-    min_max_y_config=None,
-    save_to=None,
-):
+        runs,
+        only_metrics=None,
+        log_metrics=None,
+        conv_win=1,
+        min_max_y_config=None,
+        max_iters=None,
+        save_to=None,
+    ):
     """
     Plots all metrics of all runs in log.
     """
@@ -286,7 +288,8 @@ def plot_metric(
         ax.set_ylim(0.0, None)
 
     # legend
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.65), ncol=2)
+    bbox_y = 1 + ((len(baselines) + len(l2os)) / 2) * 0.1
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, bbox_y), ncol=2)
     legend = ax.get_legend()
     for legend_handle in legend.legendHandles:
         legend_handle.set_linewidth(3.0)
@@ -549,3 +552,33 @@ def dict_to_str(d):
             inner_str += f"{k}={v}_"
     inner_str = inner_str[:-1]
     return "{" + inner_str + "}"
+
+
+def resize_dot_graph(dot, size_per_element=0.15, min_size=12):
+    """Resize the graph according to how much content it contains.
+    Modify the graph in place.
+
+    Author: ucalyptus (https://github.com/ucalyptus): https://github.com/szagoruyko/pytorchviz/issues/41#issuecomment-699061964
+    """
+    # Get the approximate number of nodes and edges
+    num_rows = len(dot.body)
+    content_size = num_rows * size_per_element
+    size = max(min_size, content_size)
+    size_str = str(size) + "," + str(size)
+    dot.graph_attr.update(size=size_str)
+    return dot
+
+
+def get_model_dot(model, model_out, show_detailed_grad_info=True, output_filepath=None):
+    if show_detailed_grad_info:
+        dot = make_dot(model_out, params=dict(model.named_parameters()), show_attrs=True, show_saved=True)
+    else:
+        dot = make_dot(model_out, params=dict(model.named_parameters()))
+    resize_dot_graph(dot, size_per_element=1, min_size=20)
+
+    if output_filepath:
+        dot.format = "png"
+        dot.render(output_filepath)
+
+    return dot
+

@@ -10,6 +10,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch import nn
 
+DEVICE = os.getenv("DEVICE", "cpu")
 
 
 def do_fit(
@@ -23,9 +24,10 @@ def do_fit(
     l2o_dict=None,
     in_meta_training=False,
     additional_metrics=None,
+    device=DEVICE,
 ):
     ### init optee
-    optee = optee_cls(**optee_config).to(data_config["device"])
+    optee = optee_cls(**optee_config).to(device)
     optee.train()
 
     ### init opter
@@ -144,7 +146,8 @@ def do_fit(
     return log, optee, opter
 
 
-def meta_train(config, l2o_dict=None, l2o_dict_best=None, log=None):
+def meta_train(config, l2o_dict=None, l2o_dict_best=None, log=None, device=DEVICE):
+    print(f"[INFO] Running on {device}")
     _config = copy.deepcopy(config)
 
     ### keep meta-training previous
@@ -191,6 +194,7 @@ def meta_train(config, l2o_dict=None, l2o_dict_best=None, log=None):
             l2o_dict=l2o_dict,
             in_meta_training=True,
             additional_metrics=_config["additional_metrics"],
+            device=device,
         )
         log["loss"].append(_log["loss"])
         log["loss_sum"].append(np.sum(_log["loss"]))

@@ -339,7 +339,7 @@ class CFGD(nn.Module):
                     or len(self.param_groups[p_idx]["alpha"]) == 1:
 
                     alpha = alpha.view(-1)
-                    if detach_gauss_jacobi:
+                    if self.detach_gauss_jacobi:
                         alpha = alpha.detach()
                     sample_points[n], sample_weights[n] = roots_jacobi_vectorized(
                         N=self.s,
@@ -415,10 +415,10 @@ class CFGD(nn.Module):
 
                     # extract only the fo and so derivatives wrt. to the changed params
                     chunks_fos.append(
-                        curr_fos.detach().view(B, p.shape.numel())[torch.arange(B), changed_elems]
+                        curr_fos.view(B, p.shape.numel())[torch.arange(B), changed_elems]
                     )
                     chunks_sos.append(
-                        curr_sos.detach().view(B, p.shape.numel())[torch.arange(B), changed_elems]
+                        curr_sos.view(B, p.shape.numel())[torch.arange(B), changed_elems]
                     )
                 fos[p_idx].append(torch.cat(chunks_fos).view(*p.shape))
                 if compute_so[p_idx]:

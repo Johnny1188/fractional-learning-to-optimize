@@ -19,6 +19,7 @@ class L2O(nn.Module):
         base_opter_cls,
         base_opter_config,
         params_to_optimize=None, # a dictionary of base opter attributes to optimize
+        device=DEVICE,
     ):
         assert base_opter_cls.__name__ in ["FGD", "CFGD_ClosedForm", "CFGD", "L2O_Update"], \
             "base_opter_cls not supported"
@@ -35,6 +36,7 @@ class L2O(nn.Module):
         self.base_opter_cls = base_opter_cls
         self.base_opter_config = base_opter_config
         self.params_to_optimize = params_to_optimize
+        self.device = device
 
         self.rnn1 = nn.LSTMCell(in_dim, hidden_sz)
         self.rnn2 = nn.LSTMCell(hidden_sz, hidden_sz)
@@ -57,18 +59,18 @@ class L2O(nn.Module):
         self._reset_hidden()
         self._reset_cell()
 
-        self.to(DEVICE)
+        self.to(device)
 
     def _reset_hidden(self):
         self.hidden = [
-            torch.zeros(self.l2o_inp_batch_dim, self.hidden_sz, device=DEVICE),
-            torch.zeros(self.l2o_inp_batch_dim, self.hidden_sz, device=DEVICE)
+            torch.zeros(self.l2o_inp_batch_dim, self.hidden_sz, device=self.device),
+            torch.zeros(self.l2o_inp_batch_dim, self.hidden_sz, device=self.device)
         ]
 
     def _reset_cell(self):
         self.cell = [
-            torch.zeros(self.l2o_inp_batch_dim, self.hidden_sz, device=DEVICE),
-            torch.zeros(self.l2o_inp_batch_dim, self.hidden_sz, device=DEVICE)
+            torch.zeros(self.l2o_inp_batch_dim, self.hidden_sz, device=self.device),
+            torch.zeros(self.l2o_inp_batch_dim, self.hidden_sz, device=self.device)
         ]
 
     def _get_iter_num_enc(self, iter_num):
@@ -79,7 +81,7 @@ class L2O(nn.Module):
     def _preproc_grad(self, grad):
         # Implement preproc described in Appendix A from Andrychowicz et al. (2016)
         grad = grad.data
-        grad_preproc = torch.zeros(grad.size()[0], 2, device=DEVICE)
+        grad_preproc = torch.zeros(grad.size()[0], 2, device=self.device)
         keep_grad_mask = (torch.abs(grad) >= self.preproc_threshold).squeeze(dim=-1)
         grad_preproc[:, 0][keep_grad_mask] = (
             torch.log(torch.abs(grad[keep_grad_mask]) + 1e-8) / self.preproc_factor
@@ -111,23 +113,23 @@ class L2O(nn.Module):
             inp.append(resize_fn(loss.log()))
 
         if "iter_num_enc" in self.in_features:
-            inp.append(resize_fn(torch.tensor(self._get_iter_num_enc(iter_num), dtype=torch.float32, device=DEVICE)))
+            inp.append(resize_fn(torch.tensor(self._get_iter_num_enc(iter_num), dtype=torch.float32, device=self.device)))
 
         if "grad_mean_norm" in self.in_features:
             grads_mean = np.mean([p.grad.norm().item() for p in optee.parameters()])
-            inp.append(resize_fn(torch.tensor(grads_mean, dtype=torch.float32, device=DEVICE)))
+            inp.append(resize_fn(torch.tensor(grads_mean, dtype=torch.float32, device=self.device)))
 
         if "grad_mean_abs" in self.in_features:
             grads_abs = np.mean([p.grad.abs().mean().item() for p in optee.parameters()])
-            inp.append(resize_fn(torch.tensor(grads_abs, dtype=torch.float32, device=DEVICE)))
+            inp.append(resize_fn(torch.tensor(grads_abs, dtype=torch.float32, device=self.device)))
 
         if "log_grad_mean_abs" in self.in_features:
             log_grads_abs = np.mean([p.grad.abs().mean().log().item() for p in optee.parameters()])
-            inp.append(resize_fn(torch.tensor(log_grads_abs, dtype=torch.float32, device=DEVICE)))
+            inp.append(resize_fn(torch.tensor(log_grads_abs, dtype=torch.float32, device=self.device)))
 
         if "log_grad_std" in self.in_features:
             log_grads_std = np.var([p.grad.std().log().item() for p in optee.parameters()])
-            inp.append(resize_fn(torch.tensor(log_grads_std, dtype=torch.float32, device=DEVICE)))
+            inp.append(resize_fn(torch.tensor(log_grads_std, dtype=torch.float32, device=self.device)))
 
         inp = torch.cat(inp, dim=-1).detach() # (B, inp_dim)
         if inp.ndim == 1:
