@@ -213,6 +213,7 @@ class CFGD(nn.Module):
         init_points=None, # initial points for AT version
         max_chunk_size=5_000_000, # max number of params to fit into memory
         detach_gauss_jacobi=True, # whether to detach the `alpha` hyperparam for calculation of the GJ quadrature
+        n_hutchinson_steps=3, # number of samples for the hutchinson method while approximating diag(H)
         device="cpu",
     ):
         assert version.upper() in ("NA", "AT"), "Only NA and AT versions of CFGD are supported for now."
@@ -246,6 +247,7 @@ class CFGD(nn.Module):
         self.detach_gauss_jacobi = detach_gauss_jacobi
         self.version = version.upper()
         self.device = device
+        self.n_hutchinson_steps = n_hutchinson_steps
 
     def _get_grads_diag_hess(self, optee, task, forward_w_params, params_for, n_iters=3):
         ### set requires_grad=False for all params
@@ -263,9 +265,13 @@ class CFGD(nn.Module):
             loss = sum([task["loss_fn"](y_hat=y_hat[:,p_idx,:]) for p_idx in range(y_hat.shape[1])])
         else:
             loss_fn = task["loss_fn_cls"](reduction="sum")
+            if task["y"].ndim == 1:
+                y = task["y"].unsqueeze(-1).expand(-1, y_hat.shape[1])
+            else:
+                y = task["y"].unsqueeze(-1).expand(-1, -1, y_hat.shape[1])
             loss = loss_fn(
                 y_hat.permute(0, 2, 1), # (data_batch_size, n_classes, n_params_to_try)
-                task["y"].unsqueeze(-1).expand(-1, y_hat.shape[1]), # (data_batch_size, n_classes)
+                y, # (data_batch_size, n_classes)
             ) / y_hat.shape[0] # average over data batch size
         grads = torch.autograd.grad(
             outputs=loss,
@@ -372,8 +378,8 @@ class CFGD(nn.Module):
             c = c_param if self.version == "NA" else self.state[p_idx]["memory"][0]
 
             ### find the eval points
-            delta_plus = (p.data.detach() + c).mul(0.5).unsqueeze(-1) # (param_size, 1)
-            delta_minus = (p.data.detach() - c).mul(0.5).unsqueeze(-1) # (param_size, 1)
+            delta_plus = (p.detach() + c).mul(0.5).unsqueeze(-1) # (param_size, 1)
+            delta_minus = (p.detach() - c).mul(0.5).unsqueeze(-1) # (param_size, 1)
             deriv_eval_points.append(
                 delta_plus * sample_points[n] + delta_minus
             ) # (param_size, s)
@@ -411,6 +417,7 @@ class CFGD(nn.Module):
                         task=task,
                         forward_w_params=pp.view(B, *p.shape),  # resize to (B, param_shape*) for the forward pass
                         params_for=n,
+                        n_iters=self.n_hutchinson_steps,
                     )
 
                     # extract only the fo and so derivatives wrt. to the changed params
@@ -425,7 +432,7 @@ class CFGD(nn.Module):
                     sos[p_idx].append(torch.cat(chunks_sos).view(*p.shape))
 
         ### get updated params
-        updated_params = dict()
+        param_step = {"last_update": dict(), "last_lr": dict()}
         for p_idx, (n, p) in enumerate(optee.all_named_parameters()):
             if not p.requires_grad:
                 continue
@@ -448,7 +455,7 @@ class CFGD(nn.Module):
                 beta = g["beta"]
                 if type(beta) == torch.Tensor and beta.shape != p.shape and len(beta) > 1:
                     beta = beta[self.state[p_idx]["step"] - 1]
-                to_sum += beta * (p - c).abs() * torch.stack(sos[p_idx]) # (s, param_size)
+                to_sum += beta * (p.detach() - c).abs() * torch.stack(sos[p_idx]) # (s, param_size)
 
             # prepare hyperparams
             alpha, beta = g["alpha"], g["beta"]
@@ -463,29 +470,46 @@ class CFGD(nn.Module):
 
             ### get updated params
             lr = g["lr"]
-            if hasattr(lr, "__call__"):
+            if hasattr(lr, "__call__") and "A" in task and "b" in task:
                 lr = lr( # only for quadratic objective functions
                     A=task["A"],
                     b=task["b"],
-                    x=p.detach().data.T,
+                    x=p.detach().T,
                     d=d.detach().T,
                 )
-            updated_params[n] = p - lr * d
-            updated_params[n].retain_grad()
+            param_step["last_update"][n] = d
+            param_step["last_lr"][n] = lr
 
             ### update internal state
             if self.version == "AT":
                 self.state[p_idx]["memory"].pop(0)
                 self.state[p_idx]["memory"].append(p.data.detach().clone())
-            self.state[p_idx]["last_update"] = lr * d.detach()
             self.state[p_idx]["last_grad"] = p.grad.detach().clone() if p.grad is not None else None
-            self.state[p_idx]["last_lr"] = lr
+
+        ### requires separate lr computation
+        if np.all([hasattr(param_step["last_lr"][n], "__call__") for n in param_step["last_lr"]]) \
+            and "A" not in task and "b" not in task:
+            lr_to_set = lr(
+                task=task,
+                optee=optee,
+                g=param_step,
+            )
+            if type(lr_to_set) == dict:
+                for n, _lr in lr_to_set.items():
+                    param_step["last_lr"][n] = _lr
+            else:
+                for n, _ in optee.all_named_parameters():
+                    param_step["last_lr"][n] = lr_to_set
 
         ### update params
-        for n, p in optee.all_named_parameters():
+        for p_idx, (n, p) in enumerate(optee.all_named_parameters()):
             if not p.requires_grad:
                 continue
-            rsetattr(optee, n, updated_params[n])
+            new_param = p - param_step["last_lr"][n] * param_step["last_update"][n]
+            new_param.retain_grad()
+            self.state[p_idx]["last_update"] = param_step["last_lr"][n] * param_step["last_update"][n].detach()
+            self.state[p_idx]["last_lr"] = param_step["last_lr"][n]
+            rsetattr(optee, n, new_param)
 
         return None
 
@@ -507,6 +531,7 @@ class CFGD_ClosedForm(nn.Module):
         version="NA", # NA: non-adaptive, AT: adaptive-terminal
         init_points=None, # initial points for AT version
         gamma_per_step=False,
+        c_per_step=False,
         device="cpu",
     ):
         assert version.upper() in ("NA", "AT"), "Only NA and AT versions of CFGD are supported for now."
@@ -531,6 +556,7 @@ class CFGD_ClosedForm(nn.Module):
             )
 
         self.gamma_per_step = gamma_per_step
+        self.c_per_step = c_per_step
         self.version = version.upper()
         self.device = device
 
@@ -578,12 +604,14 @@ class CFGD_ClosedForm(nn.Module):
                     self.state[p_idx]["memory"] = [init_p.detach().clone() for init_p in g["init_points"]]
 
             ### get update 'd'
-            c = g["c"] if self.version == "NA" else self.state[p_idx]["memory"][0]
             d = A @ p.data.T + b
+            c = g["c"] if self.version == "NA" else self.state[p_idx]["memory"][0]
+            if self.c_per_step:
+                c = c[self.state[p_idx]["step"] - 1]
             gam = g["gamma"]
             if self.gamma_per_step:
                 gam = gam[self.state[p_idx]["step"] - 1]
-            d += gam * R_tilde @ (p.data - c).T
+            d += (gam * R_tilde) @ (p.data - c).T
             d = d.T
 
             ### update params
@@ -635,39 +663,62 @@ class GD(optim.Optimizer):
     def __setstate__(self, state):
         super().__setstate__(state)
 
-    def step(self, task, closure=None):
+    def step(self, task, optee, closure=None):
         loss = None
         if closure is not None:
             loss = closure()
 
         for g in self.param_groups:
             ### get params
-            params = g["params"]
+            if "last_update" not in g:
+                g["last_update"] = {n: None for n, _ in optee.all_named_parameters()}
+                g["last_grad"] = {n: None for n, _ in optee.all_named_parameters()}
+                g["last_lr"] = {n: None for n, _ in optee.all_named_parameters()}
 
-            ### update params
-            for p in params:
+            ### get param updates
+            for n, p in optee.all_named_parameters():
                 if p.grad is None:
                     continue
 
                 ### get update 'd'
                 d = p.grad.data
 
-                ### update params
+                ### get lr
                 lr = g["lr"]
                 if hasattr(lr, "__call__"):
                     assert task is not None, "task must be provided for lr function."
-                    assert "A" in task and "b" in task, "task must have A and b."
-                    A, b = task["A"], task["b"]
-                    lr = lr(
-                        A=A,
-                        b=b,
-                        x=p.data.T,
-                        d=d.T,
-                    )
-                p.data.add_(d.detach(), alpha=-lr)
-                g["last_update"] = lr * d.detach()
-                g["last_grad"] = p.grad.detach().clone()
-                g["last_lr"] = lr
+                    if "A" in task and "b" in task:
+                        A, b = task["A"], task["b"]
+                        lr = lr(
+                            A=A,
+                            b=b,
+                            x=p.T,
+                            d=d.T,
+                        )
+
+                g["last_update"][n] = d.detach()
+                g["last_grad"][n] = p.grad.detach().clone()
+                g["last_lr"][n] = lr
+
+            ### requires separate lr computation
+            if hasattr(lr, "__call__") and "A" not in task and "b" not in task:
+                lr_to_set = lr(
+                    task=task,
+                    optee=optee,
+                    g=g,
+                )
+                if type(lr_to_set) == dict:
+                    for n, _lr in lr_to_set.items():
+                        g["last_lr"][n] = _lr
+                else:
+                    for n, _ in optee.all_named_parameters():
+                        g["last_lr"][n] = lr_to_set
+
+            ### set new params
+            for n, p in optee.all_named_parameters():
+                if p.grad is None:
+                    continue
+                p.data -= g["last_lr"][n] * g["last_update"][n]
 
         return loss
 
@@ -783,7 +834,8 @@ class L2O_Update(nn.Module):
 
     def step(self, task, optee):
         ### get updated params
-        updated_params = {}
+        # updated_params = {}
+        param_step = {"last_update": dict(), "last_lr": dict()}
         for p_idx, (g, (n, p)) in enumerate(zip(self.param_groups, optee.all_named_parameters())):
             if len(self.state[p_idx]) == 0:
                 self.state[p_idx]["step"] = 1 # iter starts from 1
@@ -795,23 +847,42 @@ class L2O_Update(nn.Module):
 
             ### get updated params
             lr = g["lr"]
-            if hasattr(lr, "__call__"):
+            if hasattr(lr, "__call__") and "A" in task and "b" in task:
                 lr = lr( # only for quadratic objective functions
                     A=task["A"],
                     b=task["b"],
                     x=p.detach().data.T,
                     d=d.detach().T,
                 )
-            updated_params[n] = p - lr * d
-            updated_params[n].retain_grad()
+            param_step["last_update"][n] = d
+            param_step["last_lr"][n] = lr
 
             ### update internal state
-            self.state[p_idx]["last_update"] = lr * d.detach()
             self.state[p_idx]["last_grad"] = p.grad.detach().clone() if p.grad is not None else None
-            self.state[p_idx]["last_lr"] = lr
+
+        ### requires separate lr computation
+        if np.all([hasattr(param_step["last_lr"][n], "__call__") for n in param_step["last_lr"]]) \
+            and "A" not in task and "b" not in task:
+            lr_to_set = lr(
+                task=task,
+                optee=optee,
+                g=param_step,
+            )
+            if type(lr_to_set) == dict:
+                for n, _lr in lr_to_set.items():
+                    param_step["last_lr"][n] = _lr
+            else:
+                for n, _ in optee.all_named_parameters():
+                    param_step["last_lr"][n] = lr_to_set
 
         ### update params
-        for n, _ in optee.all_named_parameters():
-            rsetattr(optee, n, updated_params[n])
+        for p_idx, (n, p) in enumerate(optee.all_named_parameters()):
+            if not p.requires_grad:
+                continue
+            new_param = p - param_step["last_lr"][n] * param_step["last_update"][n]
+            new_param.retain_grad()
+            self.state[p_idx]["last_update"] = param_step["last_lr"][n] * param_step["last_update"][n].detach()
+            self.state[p_idx]["last_lr"] = param_step["last_lr"][n]
+            rsetattr(optee, n, new_param)
 
         return None
