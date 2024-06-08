@@ -4,7 +4,7 @@ from torch import nn
 import torch.nn.functional as F
 
 DEVICE = os.getenv("DEVICE", "cpu")
-# DEVICE = "cuda:0"
+
 
 class MetaModule(nn.Module):
     # adopted from: Adrien Ecoffet https://github.com/AdrienLE
@@ -93,8 +93,11 @@ class MetaLinear(MetaModule):
         super().__init__()
         ignore = nn.Linear(*args, **kwargs)
 
-        self.register_buffer("weight", ignore.weight.data.clone().to(DEVICE).requires_grad_(True))
-        self.register_buffer("bias", ignore.bias.data.clone().to(DEVICE).requires_grad_(True))
+        self.register_buffer("weight", ignore.weight.data.clone().to(kwargs.get("device", DEVICE)).requires_grad_(True))
+        if ignore.bias is not None:
+            self.register_buffer("bias", ignore.bias.data.clone().to(kwargs.get("device", DEVICE)).requires_grad_(True))
+        else:
+            self.bias = None
 
     @property
     def in_features(self):
@@ -105,6 +108,8 @@ class MetaLinear(MetaModule):
         return self.weight.shape[0]
 
     def named_leaves(self):
+        if self.bias is None:
+            return [("weight", self.weight)]
         return [("weight", self.weight), ("bias", self.bias)]
 
     def forward(self, x):
@@ -135,8 +140,8 @@ class MetaBatchNorm1d(MetaModule):
         self.track_running_stats = ignore.track_running_stats
 
         if self.affine:
-            self.register_buffer("weight", ignore.weight.data.clone().to(DEVICE).requires_grad_(True))
-            self.register_buffer("bias", ignore.bias.data.clone().to(DEVICE).requires_grad_(True))
+            self.register_buffer("weight", ignore.weight.data.clone().to(kwargs.get("device", DEVICE)).requires_grad_(True))
+            self.register_buffer("bias", ignore.bias.data.clone().to(kwargs.get("device", DEVICE)).requires_grad_(True))
         else:
             self.register_parameter("weight", None)
             self.register_parameter("bias", None)

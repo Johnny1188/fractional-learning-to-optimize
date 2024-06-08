@@ -1,8 +1,11 @@
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from fl2o.optimizee_modules import MetaModule, MetaLinear, MetaParameter, MetaBatchNorm1d
+
+DEVICE = os.getenv("DEVICE", "cpu")
 
 
 class Optee(nn.Module):
@@ -29,6 +32,8 @@ class MLPOptee(MetaModule):
         act_fn=nn.ReLU(),
         out_act_fn=None,
         batch_norm=False,
+        output_bias=True,
+        device=DEVICE,
     ):
         assert not batch_norm, "batch_norm not yet fully implemented"
         super().__init__()
@@ -39,16 +44,17 @@ class MLPOptee(MetaModule):
         self.act_fn = act_fn
         self.out_act_fn = out_act_fn
         self.batch_norm = batch_norm
+        self.output_bias = output_bias
 
         ### init layers
         layers = []
         for i, layer_size in enumerate(layer_sizes):
-            layers.append(MetaLinear(inp_size, layer_size))
+            layers.append(MetaLinear(inp_size, layer_size, device=device))
             if batch_norm:
-                layers.append(MetaBatchNorm1d(num_features=layer_size))
+                layers.append(MetaBatchNorm1d(num_features=layer_size, device=device))
             layers.append(act_fn)
             inp_size = layer_size
-        layers.append(MetaLinear(inp_size, out_size))
+        layers.append(MetaLinear(inp_size, out_size, bias=output_bias, device=device))
         if out_act_fn is not None:
             layers.append(out_act_fn)
         self.layers = nn.Sequential(*layers)
@@ -61,6 +67,7 @@ class MLPOptee(MetaModule):
             act_fn=self.act_fn,
             out_act_fn=self.out_act_fn,
             batch_norm=self.batch_norm,
+            output_bias=self.output_bias,
         )
         my_params = self.all_named_parameters(to_dict=True)
         for n, p in optee_copy.all_named_parameters():
@@ -73,25 +80,58 @@ class MLPOptee(MetaModule):
         else:
             return [(k, v) for k, v in self.named_parameters()]
 
-    def forward_w_params(self, params, params_for, task=None):
+    def forward_w_params(self, params, params_for, start_at_layer_idx=None, stop_at_layer_idx=None, task=None, inp=None):
         ### allows to call forward() with a different set of params
         ### - first dim of params should be the number of params to run with
-        x = task["x"].view(-1, self.inp_size)
+        assert task is not None or inp is not None
+
+        ### prepare params to run with
+        run_params = dict()
+        if params_for is None:
+            assert type(params) == dict
+            run_params = params
+        elif type(params_for) == str:
+            run_params[params_for] = params
+        else:
+            for p_target, p in zip(params_for, ps):
+                run_params[p_target] = p
+
+        ### run
+        x = inp.view(-1, self.inp_size) if inp is not None else task["x"].view(-1, self.inp_size)
         for l_idx, l in enumerate(self.layers):
+            ### skip
+            if start_at_layer_idx is not None and l_idx < start_at_layer_idx:
+                continue
+
+            ### stop earlier
+            if stop_at_layer_idx is not None and l_idx >= stop_at_layer_idx:
+                break
+
+            ### run through the layer
             if "linear" in l.__class__.__name__.lower():
-                if params_for == f"layers.{l_idx}.weight":
-                    if params.ndim == 2:
-                        x = x @ params.T + l.bias
-                    elif  params.ndim == 3:
-                        x = (params @ x.T).permute(2, 0, 1) + l.bias # TODO: check that the bias gets correct grad
-                elif params_for == f"layers.{l_idx}.bias":
-                    x = (x @ l.weight.T).unsqueeze(1).expand(-1, params.shape[0], -1) + params
+                if f"layers.{l_idx}.weight" in run_params:
+                    ps = run_params[f"layers.{l_idx}.weight"]
+                    if ps.ndim == 2:
+                        x = x @ ps.T
+                    elif ps.ndim == 3:
+                        x = (ps @ x.T).permute(2, 0, 1)
                 else:
-                    x = l(x)
+                    x = x @ l.weight.T
+
+                if f"layers.{l_idx}.bias" in run_params:
+                    ps = run_params[f"layers.{l_idx}.bias"]
+                    if ps.ndim == 1:
+                        x += ps
+                    else:
+                        x = x.unsqueeze(1).expand(-1, ps.shape[0], -1) + ps
+                elif l.bias is not None:
+                    x += l.bias
             elif "batchnorm" in l.__class__.__name__.lower():
                 if l.training:
                     m, v_unb, v_b = x.mean(0), x.var(0, unbiased=False), x.var(0, unbiased=True)
-                    x = (x - m) / (torch.sqrt(v_unb) + l.eps) * l.weight + l.bias
+                    x = (x - m) / (torch.sqrt(v_unb) + l.eps) * l.weight
+                    if l.bias is not None:
+                        x += l.bias
                     # if l.running_mean.ndim != m.ndim:
                     #     l.running_mean = l.running_mean.unsqueeze(0).repeat(m.shape[0], 1)
                     # if l.running_var.ndim != v_b.ndim:
@@ -99,7 +139,9 @@ class MLPOptee(MetaModule):
                     # l.running_mean = (1 - l.momentum) * l.running_mean + l.momentum * m
                     # l.running_var = (1 - l.momentum) * l.running_var + l.momentum * v_b
                 else:
-                    x = (x - l.running_mean) / (torch.sqrt(l.running_var) + l.eps) * l.weight + l.bias
+                    x = (x - l.running_mean) / (torch.sqrt(l.running_var) + l.eps) * l.weight
+                    if l.bias is not None:
+                        x += l.bias
             else:
                 x = l(x) # activation
         return x

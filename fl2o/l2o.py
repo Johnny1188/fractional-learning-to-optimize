@@ -81,7 +81,7 @@ class L2O(nn.Module):
     def _preproc_grad(self, grad):
         # Implement preproc described in Appendix A from Andrychowicz et al. (2016)
         grad = grad.data
-        grad_preproc = torch.zeros(grad.size()[0], 2, device=self.device)
+        grad_preproc = torch.zeros(grad.size()[0], 2, device=grad.device)
         keep_grad_mask = (torch.abs(grad) >= self.preproc_threshold).squeeze(dim=-1)
         grad_preproc[:, 0][keep_grad_mask] = (
             torch.log(torch.abs(grad[keep_grad_mask]) + 1e-8) / self.preproc_factor
