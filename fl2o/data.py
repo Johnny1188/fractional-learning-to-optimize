@@ -1,5 +1,6 @@
 import os
 import random
+import math
 
 import numpy as np
 import torch
@@ -100,6 +101,90 @@ class MNIST:
             "loss_fn_ext": torch.nn.CrossEntropyLoss(),
             "loss_fn_cls": torch.nn.CrossEntropyLoss,
         }
+
+
+class HFunc:
+    def __init__(
+        self,
+        batch_size=100,
+        preload_n_samples=None,
+        inp_dim=1,
+        inp_range=(-1, 1),
+        seed=DEFAULT_SEED,
+        device="cpu",
+    ):
+        ### set seed
+        self.g = torch.Generator(device=device)
+        self.g.manual_seed(seed)
+
+        self.batch_size = batch_size
+        self.inp_dim = inp_dim
+        self.inp_range = inp_range
+        self.seed = seed
+        self.device = device
+        self.pi = torch.tensor(math.pi, device=device)
+        self.loss_fn = self.LossFn()
+        self.preload_n_samples = preload_n_samples
+        if self.preload_n_samples is not None:
+            assert self.preload_n_samples % self.batch_size == 0
+            self.n_batches = self.preload_n_samples // self.batch_size
+            unif = torch.rand((self.n_batches, self.batch_size, 1), generator=self.g, device=self.device)
+            self.z = self.inp_range[0] + (self.inp_range[1] - self.inp_range[0]) * unif
+            self.out = self._transform(z=self.z)
+            self.batch_idx = 0
+
+    def _transform(self, z):
+        raise NotImplementedError
+
+    class LossFn:
+        def __init__(self, reduction="sum"):
+            self.reduction = reduction
+
+        def __call__(self, y_hat, y):
+            return 1/2 * ((y_hat - y)**2).sum()
+
+    def sample(self):
+        if self.preload_n_samples:
+            z = self.z[self.batch_idx]
+            out = self.out[self.batch_idx]
+            self.batch_idx += 1
+            if self.batch_idx >= self.n_batches:
+                self.batch_idx = 0
+        else:
+            unif = torch.rand((self.batch_size, 1), generator=self.g, device=self.device)
+            z = self.inp_range[0] + (self.inp_range[1] - self.inp_range[0]) * unif
+            out = self._transform(z=z)
+
+        return {
+            "x": z,
+            "y": out,
+            "loss_fn": lambda y_hat: self.loss_fn(y_hat=y_hat, y=out),
+            "loss_fn_cls": self.LossFn,
+        }
+
+
+class H1(HFunc):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def _transform(self, z):
+        return torch.sin(5 * self.pi * z)
+
+
+class H2(HFunc):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def _transform(self, z):
+        return torch.sin(2 * self.pi * z) * torch.exp(-z**2)
+
+
+class H3(HFunc):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def _transform(self, z):
+        return (z > 0) + 0.2 * torch.sin(2 * self.pi * z)
 
 
 class CustomTask:
