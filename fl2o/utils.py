@@ -7,9 +7,11 @@ from copy import deepcopy
 import torch
 
 
-def dict_to_str(d):
+def dict_to_str(d, ignore=None):
     inner_str = ""
     for k, v in d.items():
+        if ignore is not None and k in ignore:
+            continue
         if callable(v):
             try:
                 inner_str += f"{k}={v.__name__}_"
@@ -139,10 +141,10 @@ def plotter(to_plot, run_log, meta_training_log, run_num, **kwargs):
     plt.show()
 
 
-def plot_metric(
+def plot_metrics(
     baselines,
     l2os,
-    metric,
+    metrics,
     show_max_iters=None,
     log_metric=False,
     with_err_bars=False,
@@ -156,126 +158,132 @@ def plot_metric(
 
     ### baseline optimizers
     for baseline_name, baseline_dict in baselines.items():
-        opter_metric = np.array(baseline_dict["log"][metric])
-        plot_config = baseline_dict["plot_config"] if "plot_config" in baseline_dict else None
-        
-        if show_max_iters is None:
-            x = range(opter_metric.shape[1])
-            y = np.mean(opter_metric, axis=0)
-        else:
-            x = range(opter_metric[..., :show_max_iters].shape[1])
-            y = np.mean(opter_metric[..., :show_max_iters], axis=0)
-        if conv_window and conv_window > 1:
-            y_removed_start = y[:conv_window - 1]
-            y = np.convolve(y, np.ones(conv_window), "valid") / conv_window
-            y = np.concatenate([y_removed_start, y])
-        
-        if plot_config:
-            sns.lineplot(
-                x=x,
-                y=y,
-                label=baseline_name,
-                ax=ax,
-                **plot_config,
-            )
-        else:
-            sns.lineplot(
-                x=x,
-                y=y,
-                label=baseline_name,
-                ax=ax,
-            )
+        for metric in metrics:
+            opter_metric = np.array(baseline_dict["log"][metric])
+            plot_config = baseline_dict["plot_config"] if "plot_config" in baseline_dict else None
 
-        if with_err_bars:
             if show_max_iters is None:
-                ### standard error
-                y_std_err = np.std(opter_metric, axis=0) / np.sqrt(opter_metric.shape[0])
+                x = range(opter_metric.shape[1])
+                y = np.mean(opter_metric, axis=0)
             else:
-                y_std_err = np.std(opter_metric[..., :show_max_iters], axis=0) / np.sqrt(opter_metric.shape[0])
+                x = range(opter_metric[..., :show_max_iters].shape[1])
+                y = np.mean(opter_metric[..., :show_max_iters], axis=0)
             if conv_window and conv_window > 1:
-                y_removed_start = y_std_err[:conv_window - 1]
-                y_std_err = np.convolve(y_std_err, np.ones(conv_window), "valid") / conv_window
-                y_std_err = np.concatenate([y_removed_start, y_std_err])
-            if plot_config and "color" in plot_config:
-                ax.fill_between(
-                    x,
-                    y - y_std_err,
-                    y + y_std_err,
-                    alpha=0.2,
-                    color=plot_config["color"],
+                # y_removed_start = y[:conv_window - 1]
+                y_padded = np.pad(y, (conv_window//2, conv_window-1-conv_window//2), mode="edge")
+                y = np.convolve(y_padded, np.ones(conv_window), "valid") / conv_window
+                # y = np.concatenate([y_removed_start, y])
+
+            if plot_config:
+                sns.lineplot(
+                    x=x,
+                    y=y,
+                    label=baseline_name,
+                    ax=ax,
+                    **plot_config,
                 )
             else:
-                ax.fill_between(
-                    x,
-                    y - y_std_err,
-                    y + y_std_err,
-                    alpha=0.2,
+                sns.lineplot(
+                    x=x,
+                    y=y,
+                    label=baseline_name,
+                    ax=ax,
                 )
+
+            if with_err_bars:
+                if show_max_iters is None:
+                    ### standard error
+                    y_std_err = np.std(opter_metric, axis=0) / np.sqrt(opter_metric.shape[0])
+                else:
+                    y_std_err = np.std(opter_metric[..., :show_max_iters], axis=0) / np.sqrt(opter_metric.shape[0])
+                if conv_window and conv_window > 1:
+                    # y_removed_start = y_std_err[:conv_window - 1]
+                    y_std_err_padded = np.pad(y_std_err, (conv_window//2, conv_window-1-conv_window//2), mode="edge")
+                    y_std_err = np.convolve(y_std_err_padded, np.ones(conv_window), "valid") / conv_window
+                    # y_std_err = np.concatenate([y_removed_start, y_std_err])
+                if plot_config and "color" in plot_config:
+                    ax.fill_between(
+                        x,
+                        y - y_std_err,
+                        y + y_std_err,
+                        alpha=0.2,
+                        color=plot_config["color"],
+                    )
+                else:
+                    ax.fill_between(
+                        x,
+                        y - y_std_err,
+                        y + y_std_err,
+                        alpha=0.2,
+                    )
             
 
     ### L2O optimizers
     for l2o_name, l2o_dict in l2os.items():
-        l2o_metric = np.array(l2o_dict["log"][metric])
-        plot_config = l2o_dict["plot_config"] if "plot_config" in l2o_dict else None
+        for metric in metrics:
+            l2o_metric = np.array(l2o_dict["log"][metric])
+            plot_config = l2o_dict["plot_config"] if "plot_config" in l2o_dict else None
 
-        if show_max_iters is None:
-            x = range(l2o_metric.shape[1])
-            y = np.mean(l2o_metric, axis=0)
-        else:
-            x = range(l2o_metric[:,:show_max_iters].shape[1])
-            y = np.mean(l2o_metric[:,:show_max_iters], axis=0)
-        if conv_window and conv_window > 1:
-            y_removed_start = y[:conv_window - 1]
-            y = np.convolve(y, np.ones(conv_window), "valid") / conv_window
-            y = np.concatenate([y_removed_start, y])
-        if plot_config:
-            sns.lineplot(
-                x=x,
-                y=y,
-                label=fr"{l2o_name}",
-                ax=ax,
-                **plot_config,
-            )
-        else:
-            sns.lineplot(
-                x=x,
-                y=y,
-                label=fr"{l2o_name}",
-                ax=ax,
-            )
-
-        if with_err_bars:
             if show_max_iters is None:
-                y_std_err = np.std(l2o_metric, axis=0) / np.sqrt(l2o_metric.shape[0])
+                x = range(l2o_metric.shape[1])
+                y = np.mean(l2o_metric, axis=0)
             else:
-                y_std_err = np.std(l2o_metric[:,:show_max_iters], axis=0) / np.sqrt(l2o_metric.shape[0])
+                x = range(l2o_metric[:,:show_max_iters].shape[1])
+                y = np.mean(l2o_metric[:,:show_max_iters], axis=0)
             if conv_window and conv_window > 1:
-                y_removed_start = y_std_err[:conv_window - 1]
-                y_std_err = np.convolve(y_std_err, np.ones(conv_window), "valid") / conv_window
-                y_std_err = np.concatenate([y_removed_start, y_std_err])
-            if plot_config and "color" in plot_config:
-                ax.fill_between(
-                    x,
-                    y - y_std_err,
-                    y + y_std_err,
-                    alpha=0.2,
-                    color=plot_config["color"],
+                # y_removed_start = y[:conv_window - 1]
+                y_padded = np.pad(y, (conv_window//2, conv_window-1-conv_window//2), mode="edge")
+                y = np.convolve(y_padded, np.ones(conv_window), "valid") / conv_window
+                # y = np.concatenate([y_removed_start, y])
+            if plot_config:
+                sns.lineplot(
+                    x=x,
+                    y=y,
+                    label=fr"{l2o_name}",
+                    ax=ax,
+                    **plot_config,
                 )
             else:
-                ax.fill_between(
-                    x,
-                    y - y_std_err,
-                    y + y_std_err,
-                    alpha=0.2,
+                sns.lineplot(
+                    x=x,
+                    y=y,
+                    label=fr"{l2o_name}",
+                    ax=ax,
                 )
+
+            if with_err_bars:
+                if show_max_iters is None:
+                    y_std_err = np.std(l2o_metric, axis=0) / np.sqrt(l2o_metric.shape[0])
+                else:
+                    y_std_err = np.std(l2o_metric[:,:show_max_iters], axis=0) / np.sqrt(l2o_metric.shape[0])
+                if conv_window and conv_window > 1:
+                    # y_removed_start = y_std_err[:conv_window - 1]
+                    y_std_err_padded = np.pad(y_std_err, (conv_window//2, conv_window-1-conv_window//2), mode="edge")
+                    y_std_err = np.convolve(y_std_err_padded, np.ones(conv_window), "valid") / conv_window
+                    # y_std_err = np.concatenate([y_removed_start, y_std_err])
+                if plot_config and "color" in plot_config:
+                    ax.fill_between(
+                        x,
+                        y - y_std_err,
+                        y + y_std_err,
+                        alpha=0.2,
+                        color=plot_config["color"],
+                    )
+                else:
+                    ax.fill_between(
+                        x,
+                        y - y_std_err,
+                        y + y_std_err,
+                        alpha=0.2,
+                    )
 
     ### plot settings
     # y-label
     ax.set_xlabel("Iteration")
-    if metric == "loss":
+    if metrics[0] == "loss" and len(metrics) == 1:
         metric_as_label = "Loss"
     else:
-        metric_as_label = metric
+        metric_as_label = ", ".join(metrics)
     if log_metric:
         metric_as_label = f"{metric_as_label} (log scale)"
     ax.set_ylabel(metric_as_label)
@@ -307,9 +315,9 @@ def plot_metric(
         # ax.set_yticks(y_ticks)
 
         pass
-        ax.set_ylim(8**(-1), 3.)
-        ax.set_yticks([0.3, 1, 2])
-        ax.set_yticklabels([0.3, 1, 2])
+        # ax.set_ylim(8**(-1), 3.)
+        # ax.set_yticks([0.3, 1, 2])
+        # ax.set_yticklabels([0.3, 1, 2])
         
         # ax.set_ylim(15**(-1), 8**2)
         # ax.set_yticks([0.3, 1, 2])
@@ -351,17 +359,26 @@ def plot_metric(
         fig.savefig(save_fig_to_path, bbox_inches="tight")
 
 
-def plot_strategy(to_plot, y_label, save_fig_to_path=None, mean_to_plot=None):
+def plot_strategy(to_plot, y_label, alpha_bg=0.4, conv_window_mean=None, mean_to_plot=None, save_fig_to_path=None):
     fig = plt.figure()
     # fig.suptitle(rf"L2O-CFGD: {plot_plot_label}", fontsize=16)
 
     ax = fig.add_subplot(111)
 
-    plt.plot(to_plot, alpha=0.4, color="grey")
+    ### plot all
+    plt.plot(to_plot, alpha=alpha_bg, color="grey")
+
+    ### plot mean
     if mean_to_plot is not None:
-        plt.plot(mean_to_plot, color="orange", linewidth=2.5)
+        y = mean_to_plot
     else:
-        plt.plot(to_plot.mean(-1), color="orange", linewidth=2.5)
+        y = to_plot.mean(-1)
+    if conv_window_mean and conv_window_mean > 1:
+        y_padded = np.pad(y, (conv_window_mean//2, conv_window_mean-1-conv_window_mean//2), mode="edge")
+        y = np.convolve(y_padded, np.ones(conv_window_mean), "valid") / conv_window_mean
+    
+    ### labels
+    plt.plot(y, color="orange", linewidth=2.5)
     ax.set_xlabel("Iteration")
     ax.set_ylabel(y_label)
 
@@ -540,18 +557,18 @@ def roots_jacobi_vectorized(N, alpha, beta):
     return nodes, weights
 
 
-def dict_to_str(d):
-    inner_str = ""
-    for k, v in d.items():
-        if callable(v):
-            try:
-                inner_str += f"{k}={v.__name__}_"
-            except:
-                inner_str += f"{k}={v.__class__.__name__}_"
-        else:
-            inner_str += f"{k}={v}_"
-    inner_str = inner_str[:-1]
-    return "{" + inner_str + "}"
+# def dict_to_str(d):
+#     inner_str = ""
+#     for k, v in d.items():
+#         if callable(v):
+#             try:
+#                 inner_str += f"{k}={v.__name__}_"
+#             except:
+#                 inner_str += f"{k}={v.__class__.__name__}_"
+#         else:
+#             inner_str += f"{k}={v}_"
+#     inner_str = inner_str[:-1]
+#     return "{" + inner_str + "}"
 
 
 # def resize_dot_graph(dot, size_per_element=0.15, min_size=12):
