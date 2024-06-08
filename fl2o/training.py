@@ -27,7 +27,7 @@ def do_fit(
     device=DEVICE,
 ):
     ### init optee
-    optee = optee_cls(**optee_config).to(device)
+    optee = optee_cls(**optee_config)
     optee.train()
 
     ### init opter
@@ -101,7 +101,9 @@ def do_fit(
             unroll_meta_loss = unroll_meta_loss + loss
         elif opter.__class__.__name__.lower() in ("cfgd_closedform",):
             opter.step(task=task_sample, optee=optee)
-        elif opter.__class__.__name__.lower() in ("gd", "adam"):
+        elif opter.__class__.__name__.lower() in ("gd",):
+            opter.step(task=task_sample, optee=optee)
+        elif opter.__class__.__name__.lower() in ("adam",):
             opter.step(task=task_sample)
         else:
             opter.step()
@@ -308,3 +310,102 @@ def get_optimal_lr(
     if type(lr) == torch.Tensor:
         lr = lr.item()
     return lr
+
+
+def n_step_lookahead_lr_search_hfunc_tanh_twolayer_optee(
+    task,
+    optee,
+    g,
+    n_steps=1,
+    lrs_to_try=None,
+):
+    assert n_steps == 1, "More than one step lookahead not yet implemented."
+
+    lr_out = dict()
+    with torch.no_grad():
+        ### quadratic wrt to `layers.2.weight`
+        first_layer_out = optee.forward_w_params(
+            params={
+                "layers.0.weight": optee.layers[0].weight,
+                "layers.0.bias": optee.layers[0].bias,
+            },
+            params_for=None,
+            stop_at_layer_idx=2, # stop before applying this weight matrix
+            task=task,
+        ) # (B, hidden_dim=N)
+        A = first_layer_out.T @ first_layer_out # (N, N)
+        b = -1 * first_layer_out.T @ task["y"] # (N)
+        lr_out["layers.2.weight"] = get_optimal_lr(A=A, b=b, x=optee.layers[2].weight.T, d=g["last_update"]["layers.2.weight"].T)
+
+        ### set default lrs to try
+        if lrs_to_try is None:
+            lrs_to_try = []
+            for t in (1/4, 1/2, 3/4, 1):
+                for l in range(1, 8):
+                    lrs_to_try.append(t * 10**(-l))
+
+        ### save original/current loss
+        init_loss = task["loss_fn"](y_hat=optee(task=task))
+
+        ### find the largest decrease in loss to select lr
+        best = {"loss_decrease": -np.inf, "lr": None}
+        for lr in lrs_to_try:
+            y_hat = optee.forward_w_params( # TODO: run all lrs at once
+                params={
+                    "layers.0.weight": optee.layers[0].weight - lr * g["last_update"]["layers.0.weight"],
+                    "layers.0.bias": optee.layers[0].bias - lr * g["last_update"]["layers.0.bias"],
+                    # "layers.2.weight": optee.layers[2].weight - lr * g["last_update"]["layers.2.weight"],
+                },
+                params_for=None,
+                task=task,
+            )
+            loss = task["loss_fn"](y_hat=y_hat)
+
+            if init_loss - loss > best["loss_decrease"]:
+                best["loss_decrease"] = (init_loss - loss).item()
+                best["lr"] = lr
+        lr_out["layers.0.weight"] = lr_out["layers.0.bias"] = best["lr"]
+
+    return lr_out
+
+
+def per_param_n_step_lookahead_lr_search_hfunc_tanh_twolayer_optee(
+    task,
+    optee,
+    g,
+    n_steps=1,
+    lrs_to_try=None,
+):
+    assert n_steps == 1, "More than one step lookahead not yet implemented."
+
+    lr_out = dict()
+    with torch.no_grad():
+        ### set default lrs to try
+        if lrs_to_try is None:
+            lrs_to_try = []
+            for t in (1/4, 1/2, 3/4, 1):
+                for l in range(0, 8):
+                    lrs_to_try.append(t * 10**(-l))
+
+        ### save original/current loss
+        init_loss = task["loss_fn"](y_hat=optee(task=task))
+
+        ### find the largest decrease in loss to select per-param lr
+        for n, p in optee.all_named_parameters():
+            best = {"loss_decrease": -np.inf, "lr": None}
+            for lr in lrs_to_try:
+                y_hat = optee.forward_w_params( # TODO: run all lrs at once
+                    params={
+                        n: p - lr * g["last_update"][n],
+                    },
+                    params_for=None,
+                    task=task,
+                )
+                loss = task["loss_fn"](y_hat=y_hat)
+
+                if init_loss - loss > best["loss_decrease"]:
+                    best["loss_decrease"] = (init_loss - loss).item()
+                    best["lr"] = lr
+            lr_out[n] = best["lr"]
+
+    return lr_out
