@@ -110,6 +110,7 @@ class HFunc:
         preload_n_samples=None,
         inp_dim=1,
         inp_range=(-1, 1),
+        loss_reduction="sum",
         seed=DEFAULT_SEED,
         device="cpu",
     ):
@@ -123,7 +124,7 @@ class HFunc:
         self.seed = seed
         self.device = device
         self.pi = torch.tensor(math.pi, device=device)
-        self.loss_fn = self.LossFn()
+        self.loss_fn = self.LossFn(reduction=loss_reduction)
         self.preload_n_samples = preload_n_samples
         if self.preload_n_samples is not None:
             assert self.preload_n_samples % self.batch_size == 0
@@ -141,7 +142,15 @@ class HFunc:
             self.reduction = reduction
 
         def __call__(self, y_hat, y):
-            return 1/2 * ((y_hat - y)**2).sum()
+            loss = 1/2 * ((y_hat - y)**2)
+            if self.reduction == "sum":
+                return loss.sum()
+            elif self.reduction == "mean":
+                return loss.mean()
+            elif self.reduction == "none":
+                return loss
+            else:
+                raise NotImplementedError(f"Loss function not implemented for reduction {self.reduction}")
 
     def sample(self):
         if self.preload_n_samples:
