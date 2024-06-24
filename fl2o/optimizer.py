@@ -264,7 +264,7 @@ class CFGD(nn.Module):
             y_hat = y_hat.unsqueeze(0)
             loss = sum([task["loss_fn"](y_hat=y_hat[:,p_idx,:]) for p_idx in range(y_hat.shape[1])])
         else:
-            loss_fn = task["loss_fn_cls"](reduction="sum")
+            loss_fn = task["loss_fn_cls"]()
             if task["y"].ndim == 1:
                 y = task["y"].unsqueeze(-1).expand(-1, y_hat.shape[1])
             else:
@@ -272,7 +272,7 @@ class CFGD(nn.Module):
             loss = loss_fn(
                 y_hat.permute(0, 2, 1), # (data_batch_size, n_classes, n_params_to_try)
                 y, # (data_batch_size, n_classes)
-            ) / y_hat.shape[0] # average over data batch size
+            )
         grads = torch.autograd.grad(
             outputs=loss,
             inputs=forward_w_params,
@@ -309,9 +309,7 @@ class CFGD(nn.Module):
 
     @staticmethod
     def get_c_alpha_beta(alpha, beta):
-        return (1 - alpha) / (
-            (1 + abs(beta)) * (2**(1 - alpha))
-        )
+        return (1 - alpha) / (2**(1 - alpha))
 
     def zero_grad(self):
         raise NotImplementedError("zero_grad() is not yet supported.")
@@ -381,8 +379,8 @@ class CFGD(nn.Module):
             delta_plus = (p.detach() + c).mul(0.5).unsqueeze(-1) # (param_size, 1)
             delta_minus = (p.detach() - c).mul(0.5).unsqueeze(-1) # (param_size, 1)
             deriv_eval_points.append(
-                delta_plus * sample_points[n] + delta_minus
-            ) # (param_size, s)
+                (p.detach() - c).abs().mul(0.5).unsqueeze(-1) * (1 + sample_points[n]) + c.unsqueeze(-1)
+            )
 
         ### get fo and so partial derivatives at s sample points
         fos = [[] for _ in range(len(optee_to_use.all_named_parameters()))] # fill to (n_params, s, param_size, 1)
@@ -438,39 +436,36 @@ class CFGD(nn.Module):
                 continue
 
             ### prepare update 'd'
+            d = 0
             g = self.param_groups[p_idx]
 
-            # the fo contribution
-            to_sum = torch.stack(fos[p_idx]) # (s, param_size)
-
-            # the so contribution
-            if compute_so[p_idx]:
-                if self.version == "NA":
-                    c = g["c"]
-                    if type(c) == torch.Tensor and c.shape != p.shape and len(c) > 1:
-                        c = c[self.state[p_idx]["step"] - 1]
-                else:
-                    c = self.state[p_idx]["memory"][0]
-                
-                beta = g["beta"]
-                if type(beta) == torch.Tensor and beta.shape != p.shape and len(beta) > 1:
-                    beta = beta[self.state[p_idx]["step"] - 1]
-                to_sum += beta * (p.detach() - c).abs() * torch.stack(sos[p_idx]) # (s, param_size)
-
-            # prepare hyperparams
+            ### prepare hyperparams
             alpha, beta = g["alpha"], g["beta"]
-            if type(beta) == torch.Tensor and beta.shape != p.shape and len(beta) > 1:
-                beta = beta[self.state[p_idx]["step"] - 1]
             if type(alpha) == torch.Tensor and alpha.shape != p.shape and len(alpha) > 1:
                 alpha = alpha[self.state[p_idx]["step"] - 1]
+            if type(beta) == torch.Tensor and beta.shape != p.shape and len(beta) > 1:
+                beta = beta[self.state[p_idx]["step"] - 1]
+            if self.version == "NA":
+                c = g["c"]
+                if type(c) == torch.Tensor and c.shape != p.shape and len(c) > 1:
+                    c = c[self.state[p_idx]["step"] - 1]
+            else:
+                c = self.state[p_idx]["memory"][0]
+
             C_alpha_beta = self.get_c_alpha_beta(alpha=alpha, beta=beta)
-            
-            # calc update
-            d = C_alpha_beta * to_sum.movedim(0, -1).mul(sample_weights[n]).sum(dim=-1) # (param_size)
+
+            # calc update: fo contribution
+            d += C_alpha_beta * torch.stack(fos[p_idx]).movedim(0, -1).mul(sample_weights[n]).sum(dim=-1) # (param_size)
+
+            # calc update: so contribution
+            if compute_so[p_idx]:
+                d += C_alpha_beta * beta * (p.detach() - c).abs() * torch.stack(sos[p_idx]).movedim(0, -1).mul(sample_weights[n]).sum(dim=-1)
 
             ### get updated params
             lr = g["lr"]
-            if hasattr(lr, "__call__") and "A" in task and "b" in task:
+            if hasattr(lr, "__call__") \
+              and "A" in task \
+              and "b" in task:
                 lr = lr( # only for quadratic objective functions
                     A=task["A"],
                     b=task["b"],
@@ -486,9 +481,10 @@ class CFGD(nn.Module):
                 self.state[p_idx]["memory"].append(p.data.detach().clone())
             self.state[p_idx]["last_grad"] = p.grad.detach().clone() if p.grad is not None else None
 
-        ### requires separate lr computation
+        ### requires separate function call to get the learning rate
         if np.all([hasattr(param_step["last_lr"][n], "__call__") for n in param_step["last_lr"]]) \
-            and "A" not in task and "b" not in task:
+          and "A" not in task \
+          and "b" not in task:
             lr_to_set = lr(
                 task=task,
                 optee=optee,
