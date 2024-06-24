@@ -306,7 +306,7 @@ def get_optimal_lr(
     d, # current update direction
 ):
     """Compute optimal step size for a quadratic model."""
-    lr = ((A @ x + b).T @ d) / (d.T @ A @ d)
+    lr = ((A @ x + b).T @ d) / (d.T @ A @ d + 1e-6)
     if type(lr) == torch.Tensor:
         lr = lr.item()
     return lr
@@ -365,6 +365,65 @@ def n_step_lookahead_lr_search_hfunc_tanh_twolayer_optee(
                 best["loss_decrease"] = (init_loss - loss).item()
                 best["lr"] = lr
         lr_out["layers.0.weight"] = lr_out["layers.0.bias"] = best["lr"]
+
+    return lr_out
+
+
+def parallel_n_step_lookahead_lr_search_hfunc_tanh_twolayer_optee(
+    task,
+    optee,
+    g,
+    n_steps=1,
+    lrs_to_try=None,
+):
+    assert n_steps == 1, "More than one step lookahead not yet implemented."
+
+    lr_out = dict()
+    with torch.no_grad():
+        ### set default lrs to try
+        if lrs_to_try is None:
+            lrs_to_try = []
+            for t in (1/4, 1/2, 3/4, 1):
+                for l in range(1, 8):
+                    lrs_to_try.append(t * 10**(-l))
+
+        ### save original/current loss
+        init_loss = task["loss_fn"](y_hat=optee(task=task))
+
+        ### find the largest decrease in loss to select lr
+        best = {"loss_decrease": -np.inf, "lr": None}
+        for lr in lrs_to_try:
+            ### quadratic wrt to `layers.2.weight`
+            first_layer_out = optee.forward_w_params(
+                params={
+                    "layers.0.weight": optee.layers[0].weight - lr * g["last_update"]["layers.0.weight"],
+                    "layers.0.bias": optee.layers[0].bias - lr * g["last_update"]["layers.0.bias"],
+                },
+                params_for=None,
+                stop_at_layer_idx=2, # stop before applying this weight matrix
+                task=task,
+            ) # (B, hidden_dim=N)
+            A = first_layer_out.T @ first_layer_out # (N, N)
+            b = -1 * first_layer_out.T @ task["y"] # (N)
+            lr_layer_2 = get_optimal_lr(A=A, b=b, x=optee.layers[2].weight.T, d=g["last_update"]["layers.2.weight"].T)
+
+            y_hat = optee.forward_w_params( # TODO: run all lrs at once
+                params={
+                    "layers.0.weight": optee.layers[0].weight - lr * g["last_update"]["layers.0.weight"],
+                    "layers.0.bias": optee.layers[0].bias - lr * g["last_update"]["layers.0.bias"],
+                    "layers.2.weight": optee.layers[2].weight - lr_layer_2 * g["last_update"]["layers.2.weight"],
+                },
+                params_for=None,
+                task=task,
+            )
+            loss = task["loss_fn"](y_hat=y_hat)
+
+            if init_loss - loss > best["loss_decrease"]:
+                best["loss_decrease"] = (init_loss - loss).item()
+                best["lr"] = lr
+                best["lr_layer_2"] = lr_layer_2
+        lr_out["layers.0.weight"] = lr_out["layers.0.bias"] = best["lr"]
+        lr_out["layers.2.weight"] = best["lr_layer_2"]
 
     return lr_out
 
