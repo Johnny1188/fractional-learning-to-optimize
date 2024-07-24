@@ -1,0 +1,15 @@
+name: fl2o
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10.4
+  - ipykernel
+  - matplotlib
+  - seaborn
+  - lovely-tensors
+  - pip
+  - torchvision
+  - pytorch
+  - pytorch-cuda=11.8
+  - charset-normalizer
