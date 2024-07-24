@@ -260,6 +260,7 @@ class CFGD(nn.Module):
 
         ### get grads
         y_hat = optee.forward_w_params(task=task, params=forward_w_params, params_for=params_for)
+        assert forward_w_params.shape[0] == y_hat.shape[1]
         if "A" in task.keys():  # quadratic objective function -> add data batch dim
             y_hat = y_hat.unsqueeze(0)
             loss = sum([task["loss_fn"](y_hat=y_hat[:,p_idx,:]) for p_idx in range(y_hat.shape[1])])

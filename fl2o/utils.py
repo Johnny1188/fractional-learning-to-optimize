@@ -150,6 +150,7 @@ def plot_metrics(
     with_err_bars=False,
     conv_window=None,
     save_fig_to_path=None,
+    y_max=None,
 ):
     ### plot comparison
     # fig = plt.figure(figsize=(9, 6))
@@ -330,7 +331,10 @@ def plot_metrics(
         y_max = np.ceil(y_max / 0.5) * 0.5 # round
         y_ticks = np.linspace(0, y_max, 3)
         ax.set_yticks(y_ticks)
-
+    
+    if y_max is not None:
+        ax.set_ylim(None, y_max)
+    
     # axins.set_xlim(0, 80)
     # axins.set_ylim(0.35, 2.5)
     # # axins.set_yscale("log")

@@ -4,6 +4,7 @@ import math
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torchvision import datasets, transforms
 
 DATA_PATH = os.path.join(os.getenv("DATA_PATH"))
@@ -55,6 +56,7 @@ class MNIST:
         self.training = training
         self.only_classes = only_classes
         self.batch_size = batch_size
+        self.loss_fn = self.LossFn(reduction="mean")
         self.seed = seed
         self.device = device
 
@@ -71,6 +73,19 @@ class MNIST:
 
         if preload:
             self.preload_batches()
+
+    class LossFn:
+        def __init__(self, reduction="mean"):
+            assert reduction == "mean"
+            self.reduction = reduction
+
+        def __call__(self, y_hat, y):
+            if y_hat.ndim == 3:
+                ### mean across batch dim; sum over independent forward passes
+                loss = F.cross_entropy(y_hat, y, reduction="none").mean(dim=0).sum()
+            else:
+                loss = F.cross_entropy(y_hat, y, reduction=self.reduction)
+            return loss
 
     def count_class_samples(self):
         """Counts the number of samples for each class in the dataset, returns a dictionary."""
@@ -95,11 +110,11 @@ class MNIST:
         return {
             "x": batch[0],
             "y": batch[1],
-            "loss_fn": lambda y_hat: torch.nn.functional.cross_entropy(
+            "loss_fn": lambda y_hat: self.loss_fn(
                 y_hat, batch[1]
             ),
-            "loss_fn_ext": torch.nn.CrossEntropyLoss(),
-            "loss_fn_cls": torch.nn.CrossEntropyLoss,
+            "loss_fn_ext": self.LossFn(),
+            "loss_fn_cls": self.LossFn,
         }
 
 
