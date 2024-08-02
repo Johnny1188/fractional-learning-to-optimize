@@ -601,14 +601,14 @@ class CFGD_ClosedForm(nn.Module):
                     self.state[p_idx]["memory"] = [init_p.detach().clone() for init_p in g["init_points"]]
 
             ### get update 'd'
-            d = A @ p.data.T + b
+            d = A @ p.detach().T + b
             c = g["c"] if self.version == "NA" else self.state[p_idx]["memory"][0]
             if self.c_per_step:
                 c = c[self.state[p_idx]["step"] - 1]
             gam = g["gamma"]
             if self.gamma_per_step:
                 gam = gam[self.state[p_idx]["step"] - 1]
-            d += (gam * R_tilde) @ (p.data - c).T
+            d += (gam * R_tilde) @ (p.detach() - c).T
             d = d.T
 
             ### update params
@@ -617,7 +617,144 @@ class CFGD_ClosedForm(nn.Module):
                 lr = lr(
                     A=A,
                     b=b,
-                    x=p.detach().data.T,
+                    x=p.detach().T,
+                    d=d.detach().T,
+                )
+            updated_params[n] = p - lr * d
+            updated_params[n].retain_grad()
+            
+            ### update internal state
+            if self.version == "AT":
+                self.state[p_idx]["memory"].pop(0)
+                self.state[p_idx]["memory"].append(p.data.detach().clone())
+            self.state[p_idx]["last_update"] = lr * d.detach()
+            self.state[p_idx]["last_grad"] = p.grad.detach().clone()
+            self.state[p_idx]["last_lr"] = lr
+            self.state[p_idx]["step"] += 1
+
+        ### update params
+        for n, _ in optee.all_named_parameters():
+            rsetattr(optee, n, updated_params[n])
+
+        return loss
+
+
+class CFGD_ClosedForm_v2(nn.Module):
+    """
+    Caputo Fractional Gradient Descent (CFGD) - Closed Form (only for quadratic functions)
+    - ref: https://arxiv.org/abs/2104.02259
+
+    - note: Now only non-adaptive and adaptive-terminal versions are supported.
+    """
+
+    def __init__(
+        self,
+        params,
+        lr=0.1,
+        alpha=1.,
+        beta=0,
+        c=1, # integral terminal
+        version="NA", # NA: non-adaptive, AT: adaptive-terminal
+        init_points=None, # initial points for AT version
+        gamma_per_step=False,
+        c_per_step=False,
+        device="cpu",
+    ):
+        assert version.upper() in ("NA", "AT"), "Only NA and AT versions of CFGD are supported for now."
+        assert version.upper() != "AT" or init_points is not None, "init_points must be provided for AT version."
+        super().__init__()
+
+        self.param_groups = []
+        self.state = []
+        for p in params:
+            p.retain_grad()
+            self.state.append({})
+            self.param_groups.append(
+                {
+                    "param_shape": p.shape,
+                    "lr": lr,
+                    "alpha": alpha,
+                    "beta": beta,
+                    "c": c,
+                    "device": device,
+                    "version": version.upper(),
+                    "init_points": init_points,
+                }
+            )
+
+        self.gamma_per_step = gamma_per_step
+        self.c_per_step = c_per_step
+        self.version = version.upper()
+        self.device = device
+
+    def zero_grad(self):
+        raise NotImplementedError("zero_grad() is not supported for CFGD_ClosedForm.")
+
+    def get_R_tilde(self, task):
+        R_tilde = torch.diag(torch.diag(task["A"]))
+        return R_tilde
+
+    def step(self, task, optee, closure=None):
+        """
+        Closed form step for quadratic functions from Corollary 1
+        """
+        loss = None
+        if closure is not None:
+            loss = closure()
+
+        ### get params for the closed form update
+        A, b = task["A"], task["b"]
+        R_tilde = self.get_R_tilde(task).to(self.device)
+
+        ### get updated params
+        updated_params = {}
+        for p_idx, (g, (n, p)) in enumerate(zip(self.param_groups, optee.all_named_parameters())):
+            if p.grad is None:
+                continue
+
+            if len(self.state[p_idx]) == 0:
+                self.state[p_idx]["step"] = 1 # iter starts from 1
+                if self.version == "AT":
+                    self.state[p_idx]["memory"] = [init_p.detach().clone() for init_p in g["init_points"]]
+
+            ### get update 'd'
+            d = A @ p.detach().T + b
+            c = g["c"] if self.version == "NA" else self.state[p_idx]["memory"][0]
+            if self.c_per_step:
+                c = c[self.state[p_idx]["step"] - 1]
+            alpha, beta = g["alpha"], g["beta"]
+            gam = beta - (1 - alpha)/(2 - alpha)
+            if self.gamma_per_step:
+                gam = gam[self.state[p_idx]["step"] - 1]
+            if type(gam) == torch.Tensor:
+                if gam.ndim == 1:
+                    d += torch.diag(gam) @ R_tilde @ (p.detach() - c).T
+                elif gam.ndim == 2:
+                    if gam.shape[0] == 1:
+                        gam = torch.diag(gam[0])
+                    elif gam.shape[1] == 1:
+                        gam = torch.diag(gam[1])
+                    d += gam @ R_tilde @ (p.detach() - c).T
+                else:
+                    raise ValueError
+            else:
+                d += torch.diag(torch.tensor([gam] * d.size(0), device=d.device)) @ R_tilde @ (p.detach() - c).T
+            
+            if type(beta) != torch.Tensor:
+                beta = torch.tensor([beta] * d.size(0), device=d.device)
+            else:
+                if beta.ndim == 2 and beta.shape[0] == 1:
+                    beta = beta[0]
+            d = torch.diag(1/(1 + beta.abs())) @ d
+            d = d.T
+
+            ### update params
+            lr = g["lr"]
+            if hasattr(lr, "__call__"):
+                lr = lr(
+                    A=A,
+                    b=b,
+                    x=p.detach().T,
                     d=d.detach().T,
                 )
             updated_params[n] = p - lr * d

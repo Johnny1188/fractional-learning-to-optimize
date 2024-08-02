@@ -117,9 +117,9 @@ class MetaLinear(MetaModule):
 
 
 class MetaParameter(MetaModule):
-    def __init__(self, param):
+    def __init__(self, param, device=DEVICE):
         super().__init__()
-        self.register_buffer("param", param.data.clone().to(DEVICE).requires_grad_(True))
+        self.register_buffer("param", param.data.clone().to(device).requires_grad_(True))
 
     def named_leaves(self):
         return [("param", self.param)]

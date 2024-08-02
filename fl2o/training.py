@@ -99,7 +99,7 @@ def do_fit(
         elif opter.__class__.__name__.lower() in ("l2o",):
             opter.step(y_hat=y_hat, loss=loss, task=task_sample, optee=optee, iter_num=iter_num)
             unroll_meta_loss = unroll_meta_loss + loss
-        elif opter.__class__.__name__.lower() in ("cfgd_closedform",):
+        elif opter.__class__.__name__.lower() in ("cfgd_closedform","cfgd_closedform_v2"):
             opter.step(task=task_sample, optee=optee)
         elif opter.__class__.__name__.lower() in ("gd",):
             opter.step(task=task_sample, optee=optee)

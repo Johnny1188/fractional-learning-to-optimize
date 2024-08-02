@@ -169,13 +169,14 @@ def get_mlp_optee_mirror(optee): # make a deepcopy but using standard nn.Linear 
 
 
 class CustomParams(MetaModule):
-    def __init__(self, dim, init_params="zeros", param_func=None):
+    def __init__(self, dim, init_params="zeros", param_func=None, device=DEVICE):
         super().__init__()
 
         self.dim = dim
         self.init_params = init_params
         self._params = None
         self.param_func = param_func
+        self.device = device
         self._reset_params()
 
     def _reset_params(self):
@@ -183,17 +184,17 @@ class CustomParams(MetaModule):
             self._params = self.init_params(dim=self.dim)
         else:
             if self.init_params == "zeros":
-                self._params = MetaParameter(torch.zeros(self.dim))
+                self._params = MetaParameter(torch.zeros(self.dim), device=self.device)
             elif self.init_params == "ones":
-                self._params = MetaParameter(torch.ones(self.dim))
+                self._params = MetaParameter(torch.ones(self.dim), device=self.device)
             elif self.init_params == "randn":
-                self._params = MetaParameter(torch.randn(self.dim))
+                self._params = MetaParameter(torch.randn(self.dim), device=self.device)
             elif self.init_params == "rand":
-                self._params = MetaParameter(torch.rand(self.dim))
+                self._params = MetaParameter(torch.rand(self.dim), device=self.device)
             elif type(self.init_params) in [int, float]:
-                self._params = MetaParameter(torch.ones(self.dim) * self.init_params)
+                self._params = MetaParameter(torch.ones(self.dim) * self.init_params, device=self.device)
             elif type(self.init_params) == torch.Tensor:
-                self._params = MetaParameter(self.init_params)
+                self._params = MetaParameter(self.init_params, device=self.device)
             else:
                 raise NotImplementedError
 
@@ -225,6 +226,7 @@ class CustomParams(MetaModule):
             dim=self.dim,
             init_params=self.params.detach().clone(),
             param_func=self.param_func,
+            device=self.device,
         )
 
     def all_named_parameters(self):

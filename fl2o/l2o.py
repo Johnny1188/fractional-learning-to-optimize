@@ -21,7 +21,7 @@ class L2O(nn.Module):
         params_to_optimize=None, # a dictionary of base opter attributes to optimize
         device=DEVICE,
     ):
-        assert base_opter_cls.__name__ in ["FGD", "CFGD_ClosedForm", "CFGD", "L2O_Update"], \
+        assert base_opter_cls.__name__ in ["FGD", "CFGD_ClosedForm", "CFGD", "L2O_Update", "CFGD_ClosedForm_v2"], \
             "base_opter_cls not supported"
         assert params_to_optimize is not None, "params_to_optimize must be specified"
         assert type(in_features) in [list, tuple], "in_features must be a list or tuple"
