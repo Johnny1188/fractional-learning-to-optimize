@@ -173,3 +173,38 @@ class MetaBatchNorm1d(MetaModule):
                 ("running_var", self.running_var),
             ]
         return named_leaves
+
+
+class MetaConv2d(MetaModule):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        ignore = nn.Conv2d(*args, **kwargs)
+
+        self.kernel_size = ignore.kernel_size
+        self.out_channels = ignore.out_channels
+        self.stride = ignore.stride
+        self.padding = ignore.padding
+        self.dilation = ignore.dilation
+        self.groups = ignore.groups
+
+        self.register_buffer("weight", ignore.weight.data.clone().to(kwargs.get("device", DEVICE)).requires_grad_(True))
+        if ignore.bias is not None:
+            self.register_buffer("bias", ignore.bias.data.clone().to(kwargs.get("device", DEVICE)).requires_grad_(True))
+        else:
+            self.register_buffer("bias", None)
+
+    def named_leaves(self):
+        if self.bias is None:
+            return [("weight", self.weight)]
+        return [("weight", self.weight), ("bias", self.bias)]
+
+    def forward(self, x):
+        return F.conv2d(
+            x,
+            self.weight,
+            self.bias,
+            self.stride,
+            self.padding,
+            self.dilation,
+            self.groups,
+        )
